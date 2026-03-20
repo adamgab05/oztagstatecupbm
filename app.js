@@ -1218,32 +1218,12 @@ function renderReports() {
     <div class="report-grid">
       ${canSeeBestAndFairest ? `
       <div class="report-card">
-        <h4>Best & Fairest leaderboard</h4>
-        <ol>${bfRows || "<li>No votes yet.</li>"}</ol>
-      </div>
-      <div class="report-card">
         <h4>Best & Fairest graph</h4>
         <div class="chart">${bfChartRows || "<p class='muted'>No votes yet.</p>"}</div>
       </div>` : ""}
       <div class="report-card">
-        <h4>Players' Player tallies</h4>
-        <ol>${ppRows || "<li>No votes yet.</li>"}</ol>
-      </div>
-      <div class="report-card">
         <h4>Players' Player graph</h4>
         <div class="chart">${ppChartRows || "<p class='muted'>No votes yet.</p>"}</div>
-      </div>
-      <div class="report-card">
-        <h4>Game scores</h4>
-        <ul>${gameRows || "<li>No games yet.</li>"}</ul>
-      </div>
-      <div class="report-card">
-        <h4>Player stats by game</h4>
-        <ul>${playerStatsByGameRows || "<li>No game stats yet.</li>"}</ul>
-      </div>
-      <div class="report-card">
-        <h4>Player stats summary</h4>
-        <ul>${playerStatRows || "<li>No player stats yet.</li>"}</ul>
       </div>
       <div class="report-card">
         <h4>Try scorers graph</h4>
