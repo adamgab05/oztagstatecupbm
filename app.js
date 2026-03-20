@@ -2,12 +2,16 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import {
   getAuth,
   GoogleAuthProvider,
+  EmailAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
   updateProfile,
+  deleteUser,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore,
@@ -72,6 +76,14 @@ const gamesList = document.getElementById("gamesList");
 const gamesPublicList = document.getElementById("gamesPublicList");
 
 const reportsContent = document.getElementById("reportsContent");
+
+const profileForm = document.getElementById("profileForm");
+const profileEmailInput = document.getElementById("profileEmail");
+const profileDisplayNameInput = document.getElementById("profileDisplayName");
+const deleteReauthEmailWrap = document.getElementById("deleteReauthEmail");
+const deleteAccountPasswordInput = document.getElementById("deleteAccountPassword");
+const deleteReauthGoogleNote = document.getElementById("deleteReauthGoogleNote");
+const deleteAccountButton = document.getElementById("deleteAccountButton");
 
 const tabButtons = [...document.querySelectorAll(".tab-button")];
 const tabPanels = [...document.querySelectorAll(".tab-panel")];
@@ -158,6 +170,91 @@ function setRoleUI() {
 
 function sanitizeFieldKey(value) {
   return value.replace(/[.#$/[\]]/g, "_");
+}
+
+async function decrementPlayersPlayerPublicTally(gameId, voteData) {
+  const playersPlayerName = voteData?.playersPlayer;
+  if (!playersPlayerName || !gameId) {
+    return;
+  }
+  const key = sanitizeFieldKey(playersPlayerName);
+  const statRef = doc(db, "gamePublicStats", gameId);
+  const statSnapshot = await getDoc(statRef);
+  if (!statSnapshot.exists()) {
+    return;
+  }
+  const statData = statSnapshot.data();
+  const tallies = { ...(statData.playersPlayerTallies || {}) };
+  const current = Number(tallies[key] || 0);
+  if (current <= 1) {
+    delete tallies[key];
+  } else {
+    tallies[key] = current - 1;
+  }
+  const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
+  await setDoc(
+    statRef,
+    {
+      playersPlayerTallies: tallies,
+      totalVotes,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+function hasPasswordProvider(user) {
+  return user?.providerData?.some((p) => p.providerId === "password");
+}
+
+function hasGoogleProvider(user) {
+  return user?.providerData?.some((p) => p.providerId === "google.com");
+}
+
+function populateProfileFields(user) {
+  profileEmailInput.value = user.email || "";
+  const display =
+    (user.displayName || "").trim() ||
+    (user.email || "").split("@")[0] ||
+    "";
+  profileDisplayNameInput.value = display;
+
+  const pwd = hasPasswordProvider(user);
+  const google = hasGoogleProvider(user);
+  deleteReauthEmailWrap.classList.toggle("hidden", !pwd);
+  deleteReauthGoogleNote.classList.toggle("hidden", !google || pwd);
+  deleteAccountPasswordInput.value = "";
+}
+
+async function deleteFirestoreDataForUser(uid) {
+  const voteQuery = query(collection(db, "votes"), where("userId", "==", uid));
+  const voteSnapshot = await getDocs(voteQuery);
+
+  for (const voteDoc of voteSnapshot.docs) {
+    const data = voteDoc.data();
+    await decrementPlayersPlayerPublicTally(data.gameId, data);
+    await deleteDoc(voteDoc.ref);
+  }
+
+  await deleteDoc(doc(db, "users", uid));
+  await deleteDoc(doc(db, "players", uid));
+}
+
+async function reauthenticateForSensitiveAction(user) {
+  if (hasPasswordProvider(user) && user.email) {
+    const password = deleteAccountPasswordInput.value;
+    if (!password) {
+      throw new Error("Enter your password to delete your account.");
+    }
+    const credential = EmailAuthProvider.credential(user.email, password);
+    await reauthenticateWithCredential(user, credential);
+    return;
+  }
+  if (hasGoogleProvider(user)) {
+    await reauthenticateWithPopup(auth, googleProvider);
+    return;
+  }
+  throw new Error("This account cannot be re-authenticated from this screen.");
 }
 
 function normalizeRole(roleValue) {
@@ -459,34 +556,8 @@ async function resetSingleVoteForGame(game, userEmail) {
 
   const voteDoc = voteSnapshot.docs[0];
   const voteData = voteDoc.data();
+  await decrementPlayersPlayerPublicTally(game.id, voteData);
   await deleteDoc(voteDoc.ref);
-
-  const playersPlayerName = voteData.playersPlayer;
-  if (playersPlayerName) {
-    const key = sanitizeFieldKey(playersPlayerName);
-    const statRef = doc(db, "gamePublicStats", game.id);
-    const statSnapshot = await getDoc(statRef);
-    if (statSnapshot.exists()) {
-      const statData = statSnapshot.data();
-      const tallies = { ...(statData.playersPlayerTallies || {}) };
-      const current = Number(tallies[key] || 0);
-      if (current <= 1) {
-        delete tallies[key];
-      } else {
-        tallies[key] = current - 1;
-      }
-      const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
-      await setDoc(
-        statRef,
-        {
-          playersPlayerTallies: tallies,
-          totalVotes,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-    }
-  }
 
   return { deleted: true };
 }
@@ -1376,6 +1447,69 @@ addTryScorerButton.addEventListener("click", () => {
   addTryScorerFromPicker();
 });
 
+profileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  clearMessage();
+  const user = auth.currentUser;
+  if (!user) {
+    return;
+  }
+  const name = profileDisplayNameInput.value.trim();
+  if (!name) {
+    showMessage("Please enter your full name.", "error");
+    return;
+  }
+  try {
+    await updateProfile(user, { displayName: name });
+    await setDoc(
+      doc(db, "users", user.uid),
+      { displayName: name },
+      { merge: true }
+    );
+    await setDoc(
+      doc(db, "players", user.uid),
+      {
+        name,
+        active: true,
+        userId: user.uid,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await loadPlayers();
+    showMessage("Profile saved.");
+  } catch (error) {
+    showMessage(error.message, "error");
+  }
+});
+
+deleteAccountButton.addEventListener("click", async () => {
+  clearMessage();
+  const user = auth.currentUser;
+  if (!user) {
+    return;
+  }
+  const ok = window.confirm(
+    "Delete your account permanently? This cannot be undone. Your votes and profile will be removed."
+  );
+  if (!ok) {
+    return;
+  }
+  try {
+    await reauthenticateForSensitiveAction(user);
+    await deleteFirestoreDataForUser(user.uid);
+    await deleteUser(user);
+    showMessage("Account deleted.");
+  } catch (error) {
+    const code = error?.code || "";
+    if (code === "auth/requires-recent-login") {
+      showMessage("Please sign out and sign in again, then try deleting your account.", "error");
+    } else {
+      showMessage(error.message || String(error), "error");
+    }
+  }
+});
+
 voteForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearMessage();
@@ -1459,6 +1593,7 @@ onAuthStateChanged(auth, async (user) => {
 
     setRoleUI();
     openTab("voteTab");
+    populateProfileFields(user);
 
     try {
       await loadPlayers();

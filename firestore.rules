@@ -28,7 +28,7 @@ service cloud.firestore {
       allow update: if isSelf(userId)
                     && request.resource.data.role == resource.data.role;
       allow update: if isCoachOrAdmin();
-      allow delete: if false;
+      allow delete: if isSelf(userId);
     }
 
     match /players/{playerId} {
@@ -42,11 +42,14 @@ service cloud.firestore {
     }
 
     match /votes/{voteId} {
-      allow read: if isCoachOrAdmin();
+      allow read: if isCoachOrAdmin()
+                  || (signedIn() && resource.data.userId == request.auth.uid);
       allow create: if signedIn()
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.gameId is string;
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin()
+                    || (signedIn() && resource.data.userId == request.auth.uid);
     }
 
     match /gamePublicStats/{gameId} {
