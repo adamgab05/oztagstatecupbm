@@ -50,6 +50,8 @@ const playersPlayer = document.getElementById("playersPlayer");
 const addPlayerForm = document.getElementById("addPlayerForm");
 const playerNameInput = document.getElementById("playerNameInput");
 const playersList = document.getElementById("playersList");
+const roleManagerSection = document.getElementById("roleManagerSection");
+const userRolesList = document.getElementById("userRolesList");
 
 const createGameForm = document.getElementById("createGameForm");
 const gameLabelInput = document.getElementById("gameLabelInput");
@@ -74,6 +76,7 @@ let players = [];
 let games = [];
 let votes = [];
 let gamePublicStats = {};
+let userProfiles = [];
 let editingGameId = null;
 
 const roleRank = {
@@ -129,6 +132,7 @@ function setRoleUI() {
   userRoleBadge.textContent = `Role: ${currentUserRole}`;
   const canManage = isAtLeastRole("coach");
   const canViewReports = isAtLeastRole("coach");
+  const isAdmin = currentUserRole === "admin";
   const playersTabButton = tabButtons.find((btn) => btn.dataset.tab === "playersTab");
   const gamesTabButton = tabButtons.find((btn) => btn.dataset.tab === "gamesTab");
   const reportsTabButton = tabButtons.find((btn) => btn.dataset.tab === "reportsTab");
@@ -139,6 +143,7 @@ function setRoleUI() {
 
   addPlayerForm.classList.toggle("hidden", !canManage);
   createGameForm.classList.toggle("hidden", !canManage);
+  roleManagerSection.classList.toggle("hidden", !isAdmin);
 }
 
 function sanitizeFieldKey(value) {
@@ -158,6 +163,10 @@ function setMultiSelectOptions(selectEl, allPlayers) {
   selectEl.innerHTML = allPlayers
     .map((player) => `<option value="${player.name}">${player.name}</option>`)
     .join("");
+  // Ensure no default browser auto-selection for multi-select fields.
+  [...selectEl.options].forEach((option) => {
+    option.selected = false;
+  });
 }
 
 function renderPlayers() {
@@ -318,6 +327,58 @@ function renderGamesPublic() {
     item.appendChild(info);
     gamesPublicList.appendChild(item);
   });
+}
+
+function renderUserRoles() {
+  userRolesList.innerHTML = "";
+  if (currentUserRole !== "admin") {
+    return;
+  }
+
+  userProfiles
+    .slice()
+    .sort((a, b) => (a.displayName || a.email || "").localeCompare(b.displayName || b.email || ""))
+    .forEach((profile) => {
+      const item = document.createElement("div");
+      item.className = "list-item";
+      const info = document.createElement("div");
+      const displayName = profile.displayName || profile.email || profile.id;
+      info.innerHTML = `
+        <strong>${displayName}</strong>
+        <div class="meta">${profile.email || "No email"} | role: ${profile.role || "player"}</div>
+      `;
+      item.appendChild(info);
+
+      const actions = document.createElement("div");
+      actions.className = "list-actions";
+
+      const makeCoachButton = document.createElement("button");
+      makeCoachButton.className = "btn secondary small";
+      makeCoachButton.type = "button";
+      makeCoachButton.textContent = "Make coach";
+      makeCoachButton.disabled = profile.role === "coach";
+      makeCoachButton.addEventListener("click", async () => {
+        await updateDoc(doc(db, "users", profile.id), { role: "coach" });
+        await loadUserProfiles();
+        showMessage(`${displayName} is now a coach.`);
+      });
+
+      const makePlayerButton = document.createElement("button");
+      makePlayerButton.className = "btn secondary small";
+      makePlayerButton.type = "button";
+      makePlayerButton.textContent = "Make player";
+      makePlayerButton.disabled = profile.role === "player" || profile.role === undefined;
+      makePlayerButton.addEventListener("click", async () => {
+        await updateDoc(doc(db, "users", profile.id), { role: "player" });
+        await loadUserProfiles();
+        showMessage(`${displayName} is now a player.`);
+      });
+
+      actions.appendChild(makeCoachButton);
+      actions.appendChild(makePlayerButton);
+      item.appendChild(actions);
+      userRolesList.appendChild(item);
+    });
 }
 
 function resetGameFormMode() {
@@ -703,6 +764,21 @@ async function loadPublicGameStats() {
   renderGamesPublic();
 }
 
+async function loadUserProfiles() {
+  if (currentUserRole !== "admin") {
+    userProfiles = [];
+    renderUserRoles();
+    return;
+  }
+
+  const snapshot = await getDocs(collection(db, "users"));
+  userProfiles = snapshot.docs.map((entry) => ({
+    id: entry.id,
+    ...entry.data(),
+  }));
+  renderUserRoles();
+}
+
 async function recordPublicPlayersPlayerTally(gameId, playerName) {
   const key = sanitizeFieldKey(playerName);
   const statRef = doc(db, "gamePublicStats", gameId);
@@ -842,6 +918,7 @@ createGameForm.addEventListener("submit", async (event) => {
   const selectedTryScorers = [...tryScorersSelect.selectedOptions].map(
     (option) => option.value
   );
+  const uniqueTryScorers = [...new Set(selectedTryScorers)];
   const ourScore = ourScoreInput.value === "" ? null : Number(ourScoreInput.value);
   const opponentScore =
     opponentScoreInput.value === "" ? null : Number(opponentScoreInput.value);
@@ -856,7 +933,7 @@ createGameForm.addEventListener("submit", async (event) => {
       opponent: opponentInput.value.trim(),
       ourScore,
       opponentScore,
-      tryScorers: selectedTryScorers,
+      tryScorers: uniqueTryScorers,
       updatedAt: serverTimestamp(),
     });
     showMessage(`Updated ${label}.`);
@@ -869,7 +946,7 @@ createGameForm.addEventListener("submit", async (event) => {
       opponent: opponentInput.value.trim(),
       ourScore,
       opponentScore,
-      tryScorers: selectedTryScorers,
+      tryScorers: uniqueTryScorers,
       createdAt: serverTimestamp(),
     });
     showMessage(`Created ${label}.`);
@@ -960,6 +1037,7 @@ onAuthStateChanged(auth, async (user) => {
       await loadPlayers();
       await loadGames();
       await loadPublicGameStats();
+      await loadUserProfiles();
       updatePlayerDropdowns();
       await loadVotesForReports();
     } catch (error) {
@@ -972,5 +1050,6 @@ onAuthStateChanged(auth, async (user) => {
     games = [];
     votes = [];
     gamePublicStats = {};
+    userProfiles = [];
   }
 });

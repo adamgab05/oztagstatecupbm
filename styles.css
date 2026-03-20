@@ -381,6 +381,12 @@ select:focus {
   margin: 12px 0;
 }
 
+.role-manager {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid #e2eaf2;
+}
+
 .google-auth-btn {
   width: 100%;
   display: flex;
