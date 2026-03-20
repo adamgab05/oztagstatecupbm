@@ -1120,31 +1120,28 @@ function renderReports() {
           playerGameStats[canonical] || { tries: 0, gamesWithVotes: 0 };
         playerGameStats[canonical].gamesWithVotes += 1;
       }
-      if (vote.playersPlayer) {
-        const canonical = canonicalizePlayerName(vote.playersPlayer);
-        if (!canonical) return;
-        ppTotals[canonical] = (ppTotals[canonical] || 0) + 1;
-      }
       votesByGame[vote.gameId] = (votesByGame[vote.gameId] || 0) + 1;
     });
-  } else {
-    Object.values(gamePublicStats).forEach((stats) => {
-      const tallies = stats.playersPlayerTallies || {};
-      const displayNames = stats.displayNames || {};
-      Object.entries(tallies).forEach(([key, value]) => {
-        const rawName = displayNames[key] || key.replace(/_/g, " ");
-        const canonical = canonicalizePlayerName(rawName);
-        if (!canonical) return;
-        ppTotals[canonical] = (ppTotals[canonical] || 0) + Number(value || 0);
-      });
-    });
-    games.forEach((game) => {
-      votesByGame[game.id] = gamePublicStats[game.id]?.totalVotes || 0;
-    });
-    players.forEach((player) => {
-      playerGameStats[player.name] = playerGameStats[player.name] || { tries: 0, gamesWithVotes: 0 };
-    });
   }
+
+  // Always derive Players' Player totals from public aggregates so
+  // the overall graph matches the per-game graph (and works even if
+  // some coach/admin vote docs are missing fields).
+  Object.values(gamePublicStats).forEach((stats) => {
+    const tallies = stats.playersPlayerTallies || {};
+    const displayNames = stats.displayNames || {};
+    Object.entries(tallies).forEach(([key, value]) => {
+      const rawName = displayNames[key] || key.replace(/_/g, " ");
+      const canonical = canonicalizePlayerName(rawName);
+      if (!canonical) return;
+      ppTotals[canonical] = (ppTotals[canonical] || 0) + Number(value || 0);
+    });
+  });
+
+  // Keep votesByGame useful for any legacy report rows.
+  games.forEach((game) => {
+    votesByGame[game.id] = gamePublicStats[game.id]?.totalVotes || 0;
+  });
 
   games.forEach((game) => {
     (game.tryScorers || []).forEach((name) => {
