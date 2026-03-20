@@ -1075,6 +1075,7 @@ function renderReports() {
   const ppTotals = {};
   const playerGameStats = {};
   const votesByGame = {};
+  const winnersByGame = [];
 
   players.forEach((player) => {
     bfTotals[player.name] = 0;
@@ -1143,6 +1144,36 @@ function renderReports() {
         playerGameStats[canonical] = { tries: 0, gamesWithVotes: 0 };
       }
       playerGameStats[canonical].tries += 1;
+    });
+  });
+
+  // Most Players' Player votes (winner per game).
+  games.forEach((game) => {
+    const stats = gamePublicStats?.[game.id] || {};
+    const tallies = stats.playersPlayerTallies || {};
+    const displayNames = stats.displayNames || {};
+
+    const canonicalCounts = {};
+    Object.entries(tallies).forEach(([key, value]) => {
+      const rawName = displayNames[key] || key.replace(/_/g, " ");
+      const canonical = canonicalizePlayerName(rawName) || String(rawName || "").trim();
+      if (!canonical) return;
+      canonicalCounts[canonical] = (canonicalCounts[canonical] || 0) + Number(value || 0);
+    });
+
+    const entries = Object.entries(canonicalCounts);
+    if (entries.length === 0) return;
+
+    entries.sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    });
+
+    winnersByGame.push({
+      gameId: game.id,
+      gameLabel: game.label,
+      winnerName: entries[0][0],
+      winnerVotes: entries[0][1],
     });
   });
 
@@ -1218,6 +1249,27 @@ function renderReports() {
     })
     .join("");
 
+  const maxWinnerVotes = winnersByGame.reduce(
+    (max, entry) => Math.max(max, Number(entry.winnerVotes || 0)),
+    0
+  );
+
+  const winnersRows = winnersByGame
+    .map((entry) => {
+      const widthPercent =
+        maxWinnerVotes > 0
+          ? Math.max(4, Math.round((entry.winnerVotes / maxWinnerVotes) * 100))
+          : 4;
+      return `
+        <div class="winner-row">
+          <span class="winner-label">${entry.gameLabel}</span>
+          <div class="bar-track"><div class="bar-fill accent" style="width:${widthPercent}%"></div></div>
+          <span class="winner-value">${entry.winnerName}: ${entry.winnerVotes}</span>
+        </div>
+      `;
+    })
+    .join("");
+
   reportsContent.innerHTML = `
     <div class="report-grid">
       ${canSeeBestAndFairest ? `
@@ -1228,6 +1280,10 @@ function renderReports() {
       <div class="report-card">
         <h4>Players' Player graph</h4>
         <div class="chart">${ppChartRows || "<p class='muted'>No votes yet.</p>"}</div>
+      </div>
+      <div class="report-card">
+        <h4>Players' Player winner per game</h4>
+        <div class="chart">${winnersRows || "<p class='muted'>No votes yet.</p>"}</div>
       </div>
       <div class="report-card">
         <h4>Try scorers graph</h4>

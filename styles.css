@@ -338,6 +338,30 @@ input[readonly] {
   color: #23384c;
 }
 
+.winner-row {
+  display: grid;
+  grid-template-columns: 180px 1fr 160px;
+  gap: 8px;
+  align-items: center;
+}
+
+.winner-label {
+  font-size: 0.86rem;
+  color: #42576a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.winner-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #23384c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .muted {
   color: #536577;
 }
