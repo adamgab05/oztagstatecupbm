@@ -212,11 +212,12 @@ function canonicalizePlayerName(name) {
   // This is needed because votes/tallies sometimes stored the email prefix (e.g. "Adam")
   // rather than the full player label ("Adam Gabriel").
   const adamAliasNorm = normalizePersonName("Adam");
-  if (normalized === adamAliasNorm) {
-    const adamGabriel = players.find(
-      (p) => normalizePersonName(p.name) === normalizePersonName("Adam Gabriel")
-    );
-    return adamGabriel ? adamGabriel.name : "Adam Gabriel";
+  const adamGabrielNorm = normalizePersonName("Adam Gabriel");
+  const adamGabrielCanonical =
+    players.find((p) => normalizePersonName(p.name) === adamGabrielNorm)?.name ||
+    "Adam Gabriel";
+  if (normalized === adamAliasNorm || normalized === adamGabrielNorm) {
+    return adamGabrielCanonical;
   }
 
   // If we have an email-prefix canonical map (coach/admin), prefer it.
