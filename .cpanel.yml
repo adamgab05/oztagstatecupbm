@@ -1,0 +1,7 @@
+---
+# Bluehost Git deployment (Git Version Control → Deploy HEAD commit)
+# Deploy path: /home1/csvlopmy/public_html/website_86e5c550/
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home1/csvlopmy/public_html/website_86e5c550/
+    - /bin/cp index.html app.js styles.css firebase-config.js bmoztag.jpg firebase-config.example.js firestore.rules README.md $DEPLOYPATH
