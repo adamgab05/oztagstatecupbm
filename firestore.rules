@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function currentRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isCoachOrAdmin() {
+      return signedIn() && (currentRole() == "coach" || currentRole() == "admin");
+    }
+
+    function isCoachOnly() {
+      return signedIn() && currentRole() == "coach";
+    }
+
+    match /users/{userId} {
+      allow read: if isSelf(userId) || isCoachOrAdmin();
+      allow create: if isSelf(userId)
+                    && request.resource.data.role == "player";
+      allow update: if isSelf(userId)
+                    && request.resource.data.role == resource.data.role;
+      allow update: if isCoachOrAdmin();
+      allow delete: if false;
+    }
+
+    match /players/{playerId} {
+      allow read: if signedIn();
+      allow write: if isCoachOrAdmin();
+    }
+
+    match /games/{gameId} {
+      allow read: if signedIn();
+      allow write: if isCoachOrAdmin();
+    }
+
+    match /votes/{voteId} {
+      allow read: if isCoachOnly();
+      allow create: if signedIn()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.gameId is string;
+      allow update, delete: if false;
+    }
+  }
+}

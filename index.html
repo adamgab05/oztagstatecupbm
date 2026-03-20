@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blue Mountains OzTag State Cup Portal</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">
+        <img src="./bmoztag.jpg" alt="Blue Mountains OzTag logo" />
+        <div>
+          <h1>Blue Mountains OzTag State Cup</h1>
+          <p>Team voting, management and reporting portal</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="userRoleBadge" class="badge hidden"></span>
+        <button id="logoutButton" class="btn secondary hidden">Log out</button>
+      </div>
+    </header>
+
+    <main class="container">
+      <section id="authSection" class="card auth-card">
+        <div class="auth-intro">
+          <span class="eyebrow">Blue Mountains OzTag</span>
+          <h2>Welcome back</h2>
+          <p class="muted">Sign in to vote, manage games, and track reports.</p>
+        </div>
+
+        <form id="loginForm" class="form">
+          <label for="loginEmail">Email</label>
+          <input id="loginEmail" type="email" required />
+
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" type="password" minlength="6" required />
+
+          <button type="submit" class="btn">Sign in with email</button>
+        </form>
+
+        <p class="divider"><span>or</span></p>
+        <button id="googleButton" class="google-auth-btn" type="button" aria-label="Sign in with Google">
+          <svg class="google-mark" viewBox="0 0 18 18" aria-hidden="true">
+            <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.72-1.58 2.68-3.92 2.68-6.62z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.85.86-3.04.86-2.34 0-4.31-1.58-5.02-3.7H.96v2.33A9 9 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.98 10.72A5.41 5.41 0 0 1 3.7 9c0-.6.1-1.18.28-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.02-2.33z"/>
+            <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.43 1.34l2.57-2.57C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.02 2.33c.71-2.12 2.68-3.7 5.02-3.7z"/>
+          </svg>
+          <span>Sign in with Google</span>
+        </button>
+
+        <hr class="soft-rule" />
+
+        <h3>Create account</h3>
+        <form id="registerForm" class="form">
+          <label for="registerFullName">Full name</label>
+          <input id="registerFullName" type="text" required />
+
+          <label for="registerEmail">Email</label>
+          <input id="registerEmail" type="email" required />
+
+          <label for="registerPassword">Password</label>
+          <input id="registerPassword" type="password" minlength="6" required />
+
+          <button type="submit" class="btn secondary">Create account</button>
+        </form>
+      </section>
+
+      <section id="appSection" class="hidden">
+        <nav class="tabs">
+          <button class="tab-button active" data-tab="voteTab">Vote</button>
+          <button class="tab-button" data-tab="playersTab">Player Manager</button>
+          <button class="tab-button" data-tab="gamesTab">Game Manager</button>
+          <button class="tab-button" data-tab="reportsTab">Reports</button>
+        </nav>
+
+        <section id="voteTab" class="card tab-panel active">
+          <h2>Cast votes</h2>
+          <p class="muted">One vote per user per game.</p>
+          <form id="voteForm" class="form">
+            <label for="voteGameSelect">Game</label>
+            <select id="voteGameSelect" required>
+              <option value="">Select a game...</option>
+            </select>
+
+            <h3>Best &amp; Fairest</h3>
+            <p class="muted small">Allocate different players to 3, 2 and 1 points.</p>
+            <label for="bf3">3 points</label>
+            <select id="bf3" required></select>
+            <label for="bf2">2 points</label>
+            <select id="bf2" required></select>
+            <label for="bf1">1 point</label>
+            <select id="bf1" required></select>
+
+            <h3>Players' Player</h3>
+            <label for="playersPlayer">Players' Player</label>
+            <select id="playersPlayer" required></select>
+
+            <button type="submit" class="btn">Submit vote</button>
+          </form>
+        </section>
+
+        <section id="playersTab" class="card tab-panel">
+          <h2>Player manager</h2>
+          <p class="muted">Admins and coaches can add and remove players.</p>
+          <form id="addPlayerForm" class="form inline-form">
+            <input id="playerNameInput" type="text" placeholder="Player name" required />
+            <button type="submit" class="btn">Add player</button>
+          </form>
+          <div id="playersList" class="list"></div>
+        </section>
+
+        <section id="gamesTab" class="card tab-panel">
+          <h2>Game manager</h2>
+          <p class="muted">
+            Create games, set score, and record try scorers for each game.
+          </p>
+          <form id="createGameForm" class="form">
+            <input id="gameLabelInput" type="text" placeholder="Game label (e.g. Game 1 - Pool)" required />
+            <input id="ourScoreInput" type="number" min="0" placeholder="Blue Mountains score" />
+            <input id="opponentScoreInput" type="number" min="0" placeholder="Opponent score" />
+            <label for="opponentInput">Opponent</label>
+            <input id="opponentInput" type="text" placeholder="Opponent team name" />
+            <label for="tryScorersSelect">Try scorers</label>
+            <select id="tryScorersSelect" multiple size="6"></select>
+            <button type="submit" class="btn">Create game</button>
+          </form>
+          <div id="gamesList" class="list"></div>
+        </section>
+
+        <section id="reportsTab" class="card tab-panel">
+          <h2>Reports</h2>
+          <p class="muted">
+            Includes game scores, game-by-game player stats, Players' Player tallies,
+            and Best &amp; Fairest leaderboard.
+          </p>
+          <div id="reportsContent"></div>
+        </section>
+      </section>
+
+      <section id="messageSection" class="message hidden"></section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
