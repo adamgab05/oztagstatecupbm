@@ -77,6 +77,9 @@ const gamesList = document.getElementById("gamesList");
 const gamesPublicList = document.getElementById("gamesPublicList");
 
 const reportsContent = document.getElementById("reportsContent");
+const rebuildPublicStatsButton = document.getElementById(
+  "rebuildPublicStatsButton"
+);
 
 const profileForm = document.getElementById("profileForm");
 const profileEmailInput = document.getElementById("profileEmail");
@@ -98,6 +101,7 @@ let gamePublicStats = {};
 let userProfiles = [];
 let editingGameId = null;
 let gameFormTryScorers = [];
+let emailPrefixCanonicalMap = new Map();
 
 const roleRank = {
   player: 1,
@@ -163,6 +167,10 @@ function setRoleUI() {
   roleManagerSection.classList.toggle("hidden", !isAdmin);
   runMigrationBtn.classList.toggle("hidden", !isAdmin);
 
+  if (rebuildPublicStatsButton) {
+    rebuildPublicStatsButton.classList.toggle("hidden", !canManage);
+  }
+
   const activeTabButton = tabButtons.find((button) => button.classList.contains("active"));
   if (activeTabButton && activeTabButton.classList.contains("hidden")) {
     openTab("voteTab");
@@ -195,6 +203,12 @@ function normalizePersonName(name) {
 function canonicalizePlayerName(name) {
   const normalized = normalizePersonName(name);
   if (!normalized) return "";
+
+  // If we have an email-prefix canonical map (coach/admin), prefer it.
+  if (emailPrefixCanonicalMap && emailPrefixCanonicalMap.size > 0) {
+    const byEmailPrefix = emailPrefixCanonicalMap.get(normalized);
+    if (byEmailPrefix) return byEmailPrefix;
+  }
 
   // Prefer matching email prefix (because duplicates are often stored as the email prefix).
   const emailCandidates = players
@@ -1484,6 +1498,120 @@ async function backfillPlayerEmailPrefixes() {
   }
 }
 
+async function buildEmailPrefixCanonicalMap() {
+  emailPrefixCanonicalMap = new Map();
+
+  if (!isAtLeastRole("coach")) return;
+  if (!players || players.length === 0) return;
+
+  const usersSnapshot = await getDocs(collection(db, "users"));
+  const users = usersSnapshot.docs.map((docEntry) => ({
+    uid: docEntry.id,
+    ...(docEntry.data() || {}),
+  }));
+
+  users.forEach((user) => {
+    const prefix = (user.email || "").split("@")[0]?.trim().toLowerCase();
+    const prefixNorm = normalizePersonName(prefix);
+    if (!prefixNorm) return;
+
+    const candidates = players
+      .filter((p) => p.userId === user.uid || p.id === user.uid)
+      .filter((p) => p.active !== false);
+
+    if (!candidates || candidates.length === 0) return;
+
+    const nonPrefixCandidates = candidates.filter(
+      (p) => normalizePersonName(p.name) !== prefixNorm
+    );
+
+    const list = nonPrefixCandidates.length > 0 ? nonPrefixCandidates : candidates;
+    list.sort((a, b) => {
+      const aName = String(a.name || "");
+      const bName = String(b.name || "");
+      const aSpaces = (aName.match(/\s/g) || []).length;
+      const bSpaces = (bName.match(/\s/g) || []).length;
+      if (bSpaces !== aSpaces) return bSpaces - aSpaces;
+      return bName.length - aName.length;
+    });
+
+    const canonicalName = String(list[0].name || "").trim();
+    if (canonicalName) {
+      emailPrefixCanonicalMap.set(prefixNorm, canonicalName);
+    }
+  });
+}
+
+async function rebuildGamePublicStatsByEmailPrefix() {
+  if (!isAtLeastRole("coach")) return;
+
+  messageSection.className = "message hidden";
+  messageSection.textContent = "";
+  showMessage("Rebuilding public player tallies (this can take a moment)...", "success");
+
+  await buildEmailPrefixCanonicalMap();
+
+  const votesSnapshot = await getDocs(collection(db, "votes"));
+
+  const aggByGame = new Map();
+  votesSnapshot.docs.forEach((voteDoc) => {
+    const vote = voteDoc.data() || {};
+    const gameId = vote.gameId;
+    const rawPlayer = vote.playersPlayer;
+    if (!gameId || !rawPlayer) return;
+
+    if (!aggByGame.has(gameId)) {
+      aggByGame.set(gameId, {
+        playersPlayerTallies: {},
+        displayNames: {},
+        totalVotes: 0,
+      });
+    }
+
+    const agg = aggByGame.get(gameId);
+    agg.totalVotes = Number(agg.totalVotes || 0) + 1;
+
+    const canonicalName = canonicalizePlayerName(rawPlayer) || String(rawPlayer).trim();
+    if (!canonicalName) return;
+
+    const key = sanitizeFieldKey(canonicalName);
+    agg.playersPlayerTallies[key] =
+      Number(agg.playersPlayerTallies[key] || 0) + 1;
+    agg.displayNames[key] = canonicalName;
+  });
+
+  // Overwrite each gamePublicStats doc with the rebuilt aggregates.
+  const tasks = [];
+  aggByGame.forEach((agg, gameId) => {
+    tasks.push(
+      setDoc(
+        doc(db, "gamePublicStats", gameId),
+        {
+          playersPlayerTallies: agg.playersPlayerTallies,
+          displayNames: agg.displayNames,
+          totalVotes: agg.totalVotes,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: false }
+      )
+    );
+  });
+
+  await Promise.all(tasks);
+}
+
+async function autoRebuildPublicStatsOnce() {
+  if (!isAtLeastRole("coach")) return;
+  if (sessionStorage.getItem("rebuildPublicStatsDone") === "1") return;
+
+  try {
+    await rebuildGamePublicStatsByEmailPrefix();
+    sessionStorage.setItem("rebuildPublicStatsDone", "1");
+  } catch (error) {
+    showMessage(`Rebuild failed: ${error.message}`, "error");
+  }
+}
+
 async function recordPublicPlayersPlayerTally(gameId, playerName) {
   const canonicalName = canonicalizePlayerName(playerName) || "";
   if (!canonicalName) return;
@@ -1654,6 +1782,21 @@ runMigrationBtn.addEventListener("click", async () => {
     }
   }
 });
+
+if (rebuildPublicStatsButton) {
+  rebuildPublicStatsButton.addEventListener("click", async () => {
+    clearMessage();
+    try {
+      await rebuildGamePublicStatsByEmailPrefix();
+      sessionStorage.setItem("rebuildPublicStatsDone", "1");
+      await loadPublicGameStats();
+      await loadVotesForReports();
+      showMessage("Public stats rebuilt successfully.");
+    } catch (error) {
+      showMessage(`Rebuild failed: ${error.message}`, "error");
+    }
+  });
+}
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1904,6 +2047,7 @@ onAuthStateChanged(auth, async (user) => {
     try {
       await loadPlayers();
       await backfillPlayerEmailPrefixes();
+      await autoRebuildPublicStatsOnce();
       await loadMyVotes();
       await loadGames();
       await loadPublicGameStats();
