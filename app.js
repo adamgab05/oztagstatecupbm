@@ -208,6 +208,17 @@ function canonicalizePlayerName(name) {
   const normalized = normalizePersonName(name);
   if (!normalized) return "";
 
+  // Hard alias: collapse common short-name variant.
+  // This is needed because votes/tallies sometimes stored the email prefix (e.g. "Adam")
+  // rather than the full player label ("Adam Gabriel").
+  const adamAliasNorm = normalizePersonName("Adam");
+  if (normalized === adamAliasNorm) {
+    const adamGabriel = players.find(
+      (p) => normalizePersonName(p.name) === normalizePersonName("Adam Gabriel")
+    );
+    return adamGabriel ? adamGabriel.name : "Adam Gabriel";
+  }
+
   // If we have an email-prefix canonical map (coach/admin), prefer it.
   if (emailPrefixCanonicalMap && emailPrefixCanonicalMap.size > 0) {
     const byEmailPrefix = emailPrefixCanonicalMap.get(normalized);
@@ -1075,7 +1086,6 @@ function renderReports() {
   const ppTotals = {};
   const playerGameStats = {};
   const votesByGame = {};
-  const winnersByGame = [];
 
   players.forEach((player) => {
     bfTotals[player.name] = 0;
@@ -1147,35 +1157,57 @@ function renderReports() {
     });
   });
 
-  // Most Players' Player votes (winner per game).
-  games.forEach((game) => {
-    const stats = gamePublicStats?.[game.id] || {};
+  const defaultPpGameId = games[0]?.id || "";
+
+  function renderPpPerGameChart(gameId) {
+    const stats = gamePublicStats?.[gameId] || {};
     const tallies = stats.playersPlayerTallies || {};
     const displayNames = stats.displayNames || {};
 
-    const canonicalCounts = {};
-    Object.entries(tallies).forEach(([key, value]) => {
+    const merged = {};
+    Object.entries(tallies).forEach(([key, count]) => {
       const rawName = displayNames[key] || key.replace(/_/g, " ");
-      const canonical = canonicalizePlayerName(rawName) || String(rawName || "").trim();
+      const canonical = canonicalizePlayerName(rawName);
       if (!canonical) return;
-      canonicalCounts[canonical] = (canonicalCounts[canonical] || 0) + Number(value || 0);
+      merged[canonical] = (merged[canonical] || 0) + Number(count || 0);
     });
 
-    const entries = Object.entries(canonicalCounts);
-    if (entries.length === 0) return;
-
-    entries.sort((a, b) => {
-      if (b[1] !== a[1]) return b[1] - a[1];
-      return a[0].localeCompare(b[0]);
+    // Ensure the chart includes every player, even if they received 0 votes.
+    players.forEach((p) => {
+      const canonical = canonicalizePlayerName(p.name);
+      if (!canonical) return;
+      merged[canonical] = Number(merged[canonical] || 0);
     });
 
-    winnersByGame.push({
-      gameId: game.id,
-      gameLabel: game.label,
-      winnerName: entries[0][0],
-      winnerVotes: entries[0][1],
-    });
-  });
+    const entries = Object.entries(merged)
+      .map(([name, total]) => ({ name, total: Number(total || 0) }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+
+    if (entries.length === 0) {
+      return "<p class='muted'>No votes yet.</p>";
+    }
+
+    const max = entries[0].total || 1;
+    return entries
+      .map((e) => {
+        const widthPercent = Math.max(
+          4,
+          Math.round((e.total / max) * 100)
+        );
+        return `
+          <div class="bar-row">
+            <span class="bar-label">${e.name}</span>
+            <div class="bar-track"><div class="bar-fill accent" style="width:${widthPercent}%"></div></div>
+            <span class="bar-value">${e.total}</span>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  const ppPerGameOptionsHtml = games
+    .map((g) => `<option value="${g.id}">${g.label}</option>`)
+    .join("");
 
   const bfRows = Object.entries(bfTotals)
     .sort((a, b) => b[1] - a[1])
@@ -1196,11 +1228,21 @@ function renderReports() {
       `;
     })
     .join("");
-  const ppRows = Object.entries(ppTotals)
+  const mergedPpTotals = {};
+  Object.entries(ppTotals).forEach(([name, total]) => {
+    const canonical = canonicalizePlayerName(name) || String(name || "").trim();
+    if (!canonical) return;
+    mergedPpTotals[canonical] = (mergedPpTotals[canonical] || 0) + Number(total || 0);
+  });
+
+  const ppRows = Object.entries(mergedPpTotals)
     .sort((a, b) => b[1] - a[1])
     .map(([name, total]) => `<li>${name}: ${total}</li>`)
     .join("");
-  const sortedPpEntries = Object.entries(ppTotals).sort((a, b) => b[1] - a[1]);
+
+  const sortedPpEntries = Object.entries(mergedPpTotals).sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+  );
   const maxPp = sortedPpEntries[0]?.[1] || 1;
   const ppChartRows = sortedPpEntries
     .slice(0, 12)
@@ -1249,27 +1291,6 @@ function renderReports() {
     })
     .join("");
 
-  const maxWinnerVotes = winnersByGame.reduce(
-    (max, entry) => Math.max(max, Number(entry.winnerVotes || 0)),
-    0
-  );
-
-  const winnersRows = winnersByGame
-    .map((entry) => {
-      const widthPercent =
-        maxWinnerVotes > 0
-          ? Math.max(4, Math.round((entry.winnerVotes / maxWinnerVotes) * 100))
-          : 4;
-      return `
-        <div class="winner-row">
-          <span class="winner-label">${entry.gameLabel}</span>
-          <div class="bar-track"><div class="bar-fill accent" style="width:${widthPercent}%"></div></div>
-          <span class="winner-value">${entry.winnerName}: ${entry.winnerVotes}</span>
-        </div>
-      `;
-    })
-    .join("");
-
   reportsContent.innerHTML = `
     <div class="report-grid">
       ${canSeeBestAndFairest ? `
@@ -1282,8 +1303,14 @@ function renderReports() {
         <div class="chart">${ppChartRows || "<p class='muted'>No votes yet.</p>"}</div>
       </div>
       <div class="report-card">
-        <h4>Players' Player winner per game</h4>
-        <div class="chart">${winnersRows || "<p class='muted'>No votes yet.</p>"}</div>
+        <h4>Players' Player per game</h4>
+        <label for="ppPerGameSelect" class="muted small">Select game</label>
+        <select id="ppPerGameSelect" class="select">
+          ${ppPerGameOptionsHtml}
+        </select>
+        <div id="ppPerGameChart" class="chart" style="margin-top:10px;">
+          ${renderPpPerGameChart(defaultPpGameId)}
+        </div>
       </div>
       <div class="report-card">
         <h4>Try scorers graph</h4>
@@ -1291,6 +1318,14 @@ function renderReports() {
       </div>
     </div>
   `;
+
+  const perGameSelect = document.getElementById("ppPerGameSelect");
+  const perGameChart = document.getElementById("ppPerGameChart");
+  if (perGameSelect && perGameChart) {
+    perGameSelect.addEventListener("change", () => {
+      perGameChart.innerHTML = renderPpPerGameChart(perGameSelect.value);
+    });
+  }
 }
 
 function hasPasswordProvider(user) {
