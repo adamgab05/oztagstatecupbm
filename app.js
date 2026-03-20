@@ -1124,19 +1124,38 @@ function renderReports() {
     });
   }
 
-  // Always derive Players' Player totals from public aggregates so
-  // the overall graph matches the per-game graph (and works even if
-  // some coach/admin vote docs are missing fields).
-  Object.values(gamePublicStats).forEach((stats) => {
-    const tallies = stats.playersPlayerTallies || {};
-    const displayNames = stats.displayNames || {};
-    Object.entries(tallies).forEach(([key, value]) => {
-      const rawName = displayNames[key] || key.replace(/_/g, " ");
-      const canonical = canonicalizePlayerName(rawName);
+  // Derive Players' Player totals as a true "sum across games":
+  // for each game, take that game's `playersPlayerTallies` and sum them per person.
+  // This ensures the overall graph matches the per-game chart totals.
+  function buildPpTotalsAcrossGames() {
+    const totals = {};
+
+    // Seed to ensure everyone appears (even if they got 0 votes).
+    players.forEach((p) => {
+      const canonical = canonicalizePlayerName(p.name);
       if (!canonical) return;
-      ppTotals[canonical] = (ppTotals[canonical] || 0) + Number(value || 0);
+      totals[canonical] = Number(totals[canonical] || 0);
     });
-  });
+
+    games.forEach((game) => {
+      const stats = gamePublicStats?.[game.id] || {};
+      const tallies = stats.playersPlayerTallies || {};
+      const displayNames = stats.displayNames || {};
+
+      Object.entries(tallies).forEach(([key, value]) => {
+        const rawName = displayNames[key] || key.replace(/_/g, " ");
+        const canonical = canonicalizePlayerName(rawName);
+        if (!canonical) return;
+        totals[canonical] = Number(totals[canonical] || 0) + Number(value || 0);
+      });
+    });
+
+    return totals;
+  }
+
+  const ppTotalsAcrossGames = buildPpTotalsAcrossGames();
+  Object.keys(ppTotals).forEach((k) => delete ppTotals[k]);
+  Object.assign(ppTotals, ppTotalsAcrossGames);
 
   // Keep votesByGame useful for any legacy report rows.
   games.forEach((game) => {
@@ -1242,7 +1261,6 @@ function renderReports() {
   );
   const maxPp = sortedPpEntries[0]?.[1] || 1;
   const ppChartRows = sortedPpEntries
-    .slice(0, 12)
     .map(([name, total]) => {
       const widthPercent = Math.max(4, Math.round((total / maxPp) * 100));
       return `
