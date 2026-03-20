@@ -87,6 +87,22 @@ body {
 
 .auth-intro {
   margin-bottom: 10px;
+  text-align: center;
+}
+
+.auth-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.auth-logo {
+  width: 86px;
+  height: 86px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 3px solid #e2ebf5;
+  box-shadow: 0 6px 18px rgba(10, 74, 132, 0.2);
 }
 
 .eyebrow {
@@ -268,6 +284,44 @@ select:focus {
 .report-card h4 {
   margin-top: 0;
   margin-bottom: 8px;
+}
+
+.chart {
+  display: grid;
+  gap: 8px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 130px 1fr 42px;
+  gap: 8px;
+  align-items: center;
+}
+
+.bar-label {
+  font-size: 0.86rem;
+  color: #42576a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-track {
+  height: 14px;
+  background: #e8eff6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(120deg, #0a4a84 0%, #0e5a9f 100%);
+}
+
+.bar-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #23384c;
 }
 
 .muted {

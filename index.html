@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="site-header">
+    <header id="siteHeader" class="site-header hidden">
       <div class="brand">
         <img src="./bmoztag.jpg" alt="Blue Mountains OzTag logo" />
         <div>
@@ -23,6 +23,9 @@
 
     <main class="container">
       <section id="authSection" class="card auth-card">
+        <div class="auth-logo-wrap">
+          <img class="auth-logo" src="./bmoztag.jpg" alt="Blue Mountains OzTag logo" />
+        </div>
         <div class="auth-intro">
           <span class="eyebrow">Blue Mountains OzTag</span>
           <h2>Welcome back</h2>
@@ -70,6 +73,7 @@
       <section id="appSection" class="hidden">
         <nav class="tabs">
           <button class="tab-button active" data-tab="voteTab">Vote</button>
+          <button class="tab-button" data-tab="gamesViewTab">Games</button>
           <button class="tab-button" data-tab="playersTab">Player Manager</button>
           <button class="tab-button" data-tab="gamesTab">Game Manager</button>
           <button class="tab-button" data-tab="reportsTab">Reports</button>
@@ -101,6 +105,14 @@
           </form>
         </section>
 
+        <section id="gamesViewTab" class="card tab-panel">
+          <h2>Games</h2>
+          <p class="muted">
+            View fixtures, scores, try scorers, and anonymous Players' Player tallies by game.
+          </p>
+          <div id="gamesPublicList" class="list"></div>
+        </section>
+
         <section id="playersTab" class="card tab-panel">
           <h2>Player manager</h2>
           <p class="muted">Admins and coaches can add and remove players.</p>
@@ -118,13 +130,20 @@
           </p>
           <form id="createGameForm" class="form">
             <input id="gameLabelInput" type="text" placeholder="Game label (e.g. Game 1 - Pool)" required />
+            <label for="gameDateInput">Game date</label>
+            <input id="gameDateInput" type="date" />
+            <label for="gameTimeInput">Kickoff time</label>
+            <input id="gameTimeInput" type="time" />
             <input id="ourScoreInput" type="number" min="0" placeholder="Blue Mountains score" />
             <input id="opponentScoreInput" type="number" min="0" placeholder="Opponent score" />
             <label for="opponentInput">Opponent</label>
             <input id="opponentInput" type="text" placeholder="Opponent team name" />
             <label for="tryScorersSelect">Try scorers</label>
             <select id="tryScorersSelect" multiple size="6"></select>
-            <button type="submit" class="btn">Create game</button>
+            <div class="list-actions">
+              <button id="saveGameButton" type="submit" class="btn">Create game</button>
+              <button id="cancelEditGameButton" type="button" class="btn secondary hidden">Cancel edit</button>
+            </div>
           </form>
           <div id="gamesList" class="list"></div>
         </section>

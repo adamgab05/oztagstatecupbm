@@ -17,10 +17,6 @@ service cloud.firestore {
       return signedIn() && (currentRole() == "coach" || currentRole() == "admin");
     }
 
-    function isCoachOnly() {
-      return signedIn() && currentRole() == "coach";
-    }
-
     match /users/{userId} {
       allow read: if isSelf(userId) || isCoachOrAdmin();
       allow create: if isSelf(userId)
@@ -42,11 +38,16 @@ service cloud.firestore {
     }
 
     match /votes/{voteId} {
-      allow read: if isCoachOnly();
+      allow read: if isCoachOrAdmin();
       allow create: if signedIn()
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.gameId is string;
       allow update, delete: if false;
+    }
+
+    match /gamePublicStats/{gameId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
     }
   }
 }

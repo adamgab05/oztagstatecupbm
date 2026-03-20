@@ -18,6 +18,7 @@ import {
   addDoc,
   deleteDoc,
   updateDoc,
+  increment,
   serverTimestamp,
   setDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -33,6 +34,7 @@ const appSection = document.getElementById("appSection");
 const messageSection = document.getElementById("messageSection");
 const logoutButton = document.getElementById("logoutButton");
 const userRoleBadge = document.getElementById("userRoleBadge");
+const siteHeader = document.getElementById("siteHeader");
 
 const loginForm = document.getElementById("loginForm");
 const registerForm = document.getElementById("registerForm");
@@ -51,11 +53,16 @@ const playersList = document.getElementById("playersList");
 
 const createGameForm = document.getElementById("createGameForm");
 const gameLabelInput = document.getElementById("gameLabelInput");
+const gameDateInput = document.getElementById("gameDateInput");
+const gameTimeInput = document.getElementById("gameTimeInput");
 const opponentInput = document.getElementById("opponentInput");
 const ourScoreInput = document.getElementById("ourScoreInput");
 const opponentScoreInput = document.getElementById("opponentScoreInput");
 const tryScorersSelect = document.getElementById("tryScorersSelect");
+const saveGameButton = document.getElementById("saveGameButton");
+const cancelEditGameButton = document.getElementById("cancelEditGameButton");
 const gamesList = document.getElementById("gamesList");
+const gamesPublicList = document.getElementById("gamesPublicList");
 
 const reportsContent = document.getElementById("reportsContent");
 
@@ -66,6 +73,8 @@ let currentUserRole = "player";
 let players = [];
 let games = [];
 let votes = [];
+let gamePublicStats = {};
+let editingGameId = null;
 
 const roleRank = {
   player: 1,
@@ -98,6 +107,7 @@ function setAuthenticatedUI(isAuthenticated) {
   appSection.classList.toggle("hidden", !isAuthenticated);
   logoutButton.classList.toggle("hidden", !isAuthenticated);
   userRoleBadge.classList.toggle("hidden", !isAuthenticated);
+  siteHeader.classList.toggle("hidden", !isAuthenticated);
 }
 
 function setOptions(selectEl, players) {
@@ -118,17 +128,21 @@ function isAtLeastRole(minRole) {
 function setRoleUI() {
   userRoleBadge.textContent = `Role: ${currentUserRole}`;
   const canManage = isAtLeastRole("coach");
-  const isCoachOnly = currentUserRole === "coach";
+  const canViewReports = isAtLeastRole("coach");
   const playersTabButton = tabButtons.find((btn) => btn.dataset.tab === "playersTab");
   const gamesTabButton = tabButtons.find((btn) => btn.dataset.tab === "gamesTab");
   const reportsTabButton = tabButtons.find((btn) => btn.dataset.tab === "reportsTab");
 
   playersTabButton.classList.toggle("hidden", !canManage);
   gamesTabButton.classList.toggle("hidden", !canManage);
-  reportsTabButton.classList.toggle("hidden", !isCoachOnly);
+  reportsTabButton.classList.toggle("hidden", !canViewReports);
 
   addPlayerForm.classList.toggle("hidden", !canManage);
   createGameForm.classList.toggle("hidden", !canManage);
+}
+
+function sanitizeFieldKey(value) {
+  return value.replace(/[.#$/[\]]/g, "_");
 }
 
 function openTab(tabId) {
@@ -230,6 +244,32 @@ function renderGames() {
     if (isAtLeastRole("coach")) {
       const actions = document.createElement("div");
       actions.className = "list-actions";
+      const editButton = document.createElement("button");
+      editButton.className = "btn secondary small";
+      editButton.textContent = "Edit";
+      editButton.type = "button";
+      editButton.addEventListener("click", () => {
+        editingGameId = game.id;
+        gameLabelInput.value = game.label || "";
+        gameDateInput.value = game.gameDate || "";
+        gameTimeInput.value = toTimeInputValue(game.kickoffTime || "");
+        opponentInput.value = game.opponent || "";
+        ourScoreInput.value =
+          Number.isInteger(game.ourScore) ? String(game.ourScore) : "";
+        opponentScoreInput.value =
+          Number.isInteger(game.opponentScore) ? String(game.opponentScore) : "";
+
+        const tryScorers = new Set(game.tryScorers || []);
+        [...tryScorersSelect.options].forEach((option) => {
+          option.selected = tryScorers.has(option.value);
+        });
+
+        saveGameButton.textContent = "Save changes";
+        cancelEditGameButton.classList.remove("hidden");
+        showMessage(`Editing ${game.label}.`);
+      });
+      actions.appendChild(editButton);
+
       const deleteButton = document.createElement("button");
       deleteButton.className = "btn danger small";
       deleteButton.textContent = "Delete";
@@ -244,6 +284,83 @@ function renderGames() {
     }
     gamesList.appendChild(item);
   });
+}
+
+function getPlayersPlayerTalliesForGame(gameId) {
+  const stats = gamePublicStats[gameId] || {};
+  const tallies = stats.playersPlayerTallies || {};
+  const displayNames = stats.displayNames || {};
+  return Object.entries(tallies)
+    .map(([key, count]) => ({
+      name: displayNames[key] || key.replace(/_/g, " "),
+      count,
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function renderGamesPublic() {
+  gamesPublicList.innerHTML = "";
+  games.forEach((game) => {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    const tallies = getPlayersPlayerTalliesForGame(game.id);
+    const talliesText = tallies.length
+      ? tallies.map((entry) => `${entry.name}: ${entry.count}`).join(", ")
+      : "No votes yet";
+    const tryScorers = Array.isArray(game.tryScorers) ? game.tryScorers.join(", ") : "";
+    const info = document.createElement("div");
+    info.innerHTML = `
+      <strong>${game.label}</strong>
+      <div class="meta">${formatGameMeta(game)}</div>
+      <div class="meta">Try scorers: ${tryScorers || "None"}</div>
+      <div class="meta">Players' Player (anonymous): ${talliesText}</div>
+    `;
+    item.appendChild(info);
+    gamesPublicList.appendChild(item);
+  });
+}
+
+function resetGameFormMode() {
+  editingGameId = null;
+  createGameForm.reset();
+  [...tryScorersSelect.options].forEach((option) => {
+    option.selected = false;
+  });
+  saveGameButton.textContent = "Create game";
+  cancelEditGameButton.classList.add("hidden");
+}
+
+function toTimeInputValue(kickoffTime) {
+  const normalized = kickoffTime.toLowerCase().trim();
+  const match = normalized.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
+  if (!match) {
+    return "";
+  }
+  let hour = Number(match[1]);
+  const minute = match[2];
+  const period = match[3];
+
+  if (period === "pm" && hour < 12) {
+    hour += 12;
+  }
+  if (period === "am" && hour === 12) {
+    hour = 0;
+  }
+  return `${String(hour).padStart(2, "0")}:${minute}`;
+}
+
+function toDisplayTime(timeValue) {
+  if (!timeValue) {
+    return "";
+  }
+  const [h, m] = timeValue.split(":");
+  if (h === undefined || m === undefined) {
+    return "";
+  }
+  let hour = Number(h);
+  const suffix = hour >= 12 ? "pm" : "am";
+  hour = hour % 12 || 12;
+  return `${hour}:${m}${suffix}`;
 }
 
 async function ensureUserProfile(user) {
@@ -447,8 +564,8 @@ function validateVotes(values) {
 }
 
 function renderReports() {
-  if (currentUserRole !== "coach") {
-    reportsContent.innerHTML = '<p class="muted">Reports are visible to coach role only.</p>';
+  if (!isAtLeastRole("coach")) {
+    reportsContent.innerHTML = '<p class="muted">Reports are visible to admin and coach roles.</p>';
     return;
   }
 
@@ -499,6 +616,21 @@ function renderReports() {
     .sort((a, b) => b[1] - a[1])
     .map(([name, points]) => `<li>${name}: ${points} pts</li>`)
     .join("");
+  const sortedBfEntries = Object.entries(bfTotals).sort((a, b) => b[1] - a[1]);
+  const maxPoints = sortedBfEntries[0]?.[1] || 1;
+  const bfChartRows = sortedBfEntries
+    .slice(0, 12)
+    .map(([name, points]) => {
+      const widthPercent = Math.max(4, Math.round((points / maxPoints) * 100));
+      return `
+        <div class="bar-row">
+          <span class="bar-label">${name}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${widthPercent}%"></div></div>
+          <span class="bar-value">${points}</span>
+        </div>
+      `;
+    })
+    .join("");
   const ppRows = Object.entries(ppTotals)
     .sort((a, b) => b[1] - a[1])
     .map(([name, total]) => `<li>${name}: ${total}</li>`)
@@ -525,6 +657,10 @@ function renderReports() {
         <ol>${bfRows || "<li>No votes yet.</li>"}</ol>
       </div>
       <div class="report-card">
+        <h4>Best & Fairest graph</h4>
+        <div class="chart">${bfChartRows || "<p class='muted'>No votes yet.</p>"}</div>
+      </div>
+      <div class="report-card">
         <h4>Players' Player tallies</h4>
         <ol>${ppRows || "<li>No votes yet.</li>"}</ol>
       </div>
@@ -545,7 +681,7 @@ function renderReports() {
 }
 
 async function loadVotesForReports() {
-  if (currentUserRole !== "coach") {
+  if (!isAtLeastRole("coach")) {
     votes = [];
     renderReports();
     return;
@@ -556,6 +692,39 @@ async function loadVotesForReports() {
     ...entry.data(),
   }));
   renderReports();
+}
+
+async function loadPublicGameStats() {
+  const snapshot = await getDocs(collection(db, "gamePublicStats"));
+  gamePublicStats = {};
+  snapshot.docs.forEach((entry) => {
+    gamePublicStats[entry.id] = entry.data();
+  });
+  renderGamesPublic();
+}
+
+async function recordPublicPlayersPlayerTally(gameId, playerName) {
+  const key = sanitizeFieldKey(playerName);
+  const statRef = doc(db, "gamePublicStats", gameId);
+  try {
+    await updateDoc(statRef, {
+      [`playersPlayerTallies.${key}`]: increment(1),
+      [`displayNames.${key}`]: playerName,
+      totalVotes: increment(1),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    await setDoc(
+      statRef,
+      {
+        playersPlayerTallies: { [key]: 1 },
+        displayNames: { [key]: playerName },
+        totalVotes: 1,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
 }
 
 loginForm.addEventListener("submit", async (event) => {
@@ -676,22 +845,43 @@ createGameForm.addEventListener("submit", async (event) => {
   const ourScore = ourScoreInput.value === "" ? null : Number(ourScoreInput.value);
   const opponentScore =
     opponentScoreInput.value === "" ? null : Number(opponentScoreInput.value);
+  const gameDate = gameDateInput.value || "";
+  const kickoffTime = toDisplayTime(gameTimeInput.value);
 
-  await addDoc(collection(db, "games"), {
-    label,
-    gameDate: "",
-    kickoffTime: "",
-    kickoffOrder: games.length + 100,
-    opponent: opponentInput.value.trim(),
-    ourScore,
-    opponentScore,
-    tryScorers: selectedTryScorers,
-    createdAt: serverTimestamp(),
-  });
+  if (editingGameId) {
+    await updateDoc(doc(db, "games", editingGameId), {
+      label,
+      gameDate,
+      kickoffTime,
+      opponent: opponentInput.value.trim(),
+      ourScore,
+      opponentScore,
+      tryScorers: selectedTryScorers,
+      updatedAt: serverTimestamp(),
+    });
+    showMessage(`Updated ${label}.`);
+  } else {
+    await addDoc(collection(db, "games"), {
+      label,
+      gameDate,
+      kickoffTime,
+      kickoffOrder: games.length + 100,
+      opponent: opponentInput.value.trim(),
+      ourScore,
+      opponentScore,
+      tryScorers: selectedTryScorers,
+      createdAt: serverTimestamp(),
+    });
+    showMessage(`Created ${label}.`);
+  }
 
-  createGameForm.reset();
+  resetGameFormMode();
   await loadGames();
-  showMessage(`Created ${label}.`);
+});
+
+cancelEditGameButton.addEventListener("click", () => {
+  resetGameFormMode();
+  showMessage("Edit cancelled.");
 });
 
 voteForm.addEventListener("submit", async (event) => {
@@ -748,9 +938,11 @@ voteForm.addEventListener("submit", async (event) => {
       playersPlayer: formValues.playersPlayer,
       createdAt: serverTimestamp(),
     });
+    await recordPublicPlayersPlayerTally(formValues.gameId, formValues.playersPlayer);
 
     voteForm.reset();
     updatePlayerDropdowns();
+    await loadPublicGameStats();
     showMessage("Vote submitted successfully.");
   } catch (error) {
     showMessage(error.message, "error");
@@ -767,6 +959,7 @@ onAuthStateChanged(auth, async (user) => {
       openTab("voteTab");
       await loadPlayers();
       await loadGames();
+      await loadPublicGameStats();
       updatePlayerDropdowns();
       await loadVotesForReports();
     } catch (error) {
@@ -778,5 +971,6 @@ onAuthStateChanged(auth, async (user) => {
     players = [];
     games = [];
     votes = [];
+    gamePublicStats = {};
   }
 });
