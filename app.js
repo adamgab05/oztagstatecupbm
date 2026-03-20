@@ -160,6 +160,18 @@ function sanitizeFieldKey(value) {
   return value.replace(/[.#$/[\]]/g, "_");
 }
 
+function normalizeRole(roleValue) {
+  const normalized = String(roleValue || "").trim().toLowerCase();
+  if (normalized === "admin" || normalized === "coach" || normalized === "player") {
+    return normalized;
+  }
+  return "player";
+}
+
+function getProfileDisplayName(profile) {
+  return (profile.displayName || "").trim() || (profile.email || "").split("@")[0] || profile.id;
+}
+
 function openTab(tabId) {
   tabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
@@ -382,17 +394,11 @@ function renderGames() {
         resetSingleVoteButton.textContent = "Reset user vote";
         resetSingleVoteButton.type = "button";
         resetSingleVoteButton.addEventListener("click", async () => {
-          const userEmail = window
-            .prompt(
-              `Enter voter email to reset for ${game.label} (exact match):`
-            )
-            ?.trim()
-            .toLowerCase();
-          if (!userEmail) {
-            return;
-          }
-
           try {
+            const userEmail = await pickVoterForGame(game);
+            if (!userEmail) {
+              return;
+            }
             const result = await resetSingleVoteForGame(game, userEmail);
             await loadPublicGameStats();
             await loadVotesForReports();
@@ -485,6 +491,78 @@ async function resetSingleVoteForGame(game, userEmail) {
   return { deleted: true };
 }
 
+async function pickVoterForGame(game) {
+  const voteQuery = query(
+    collection(db, "votes"),
+    where("gameId", "==", game.id)
+  );
+  const voteSnapshot = await getDocs(voteQuery);
+  if (voteSnapshot.empty) {
+    showMessage(`No votes found for ${game.label}.`, "error");
+    return null;
+  }
+
+  const voterEmails = [...new Set(
+    voteSnapshot.docs
+      .map((entry) => (entry.data().voterEmail || "").trim().toLowerCase())
+      .filter(Boolean)
+  )].sort((a, b) => a.localeCompare(b));
+
+  if (voterEmails.length === 0) {
+    showMessage(`No voter emails stored for ${game.label}.`, "error");
+    return null;
+  }
+
+  return showVoterSelectDialog(game.label, voterEmails);
+}
+
+function showVoterSelectDialog(gameLabel, voterEmails) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.background = "rgba(10, 20, 30, 0.45)";
+    overlay.style.display = "grid";
+    overlay.style.placeItems = "center";
+    overlay.style.zIndex = "1000";
+
+    const dialog = document.createElement("div");
+    dialog.className = "card";
+    dialog.style.width = "min(460px, 92vw)";
+    dialog.style.margin = "0";
+    dialog.innerHTML = `
+      <h3 style="margin-top:0;">Reset user vote</h3>
+      <p class="muted">Select voter for <strong>${gameLabel}</strong>.</p>
+      <label for="resetVoterSelect">Voter</label>
+      <select id="resetVoterSelect">
+        ${voterEmails.map((email) => `<option value="${email}">${email}</option>`).join("")}
+      </select>
+      <div class="list-actions" style="margin-top:12px;">
+        <button type="button" class="btn secondary" id="cancelResetVoteButton">Cancel</button>
+        <button type="button" class="btn danger" id="confirmResetVoteButton">Reset vote</button>
+      </div>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const cleanup = () => {
+      overlay.remove();
+    };
+
+    dialog.querySelector("#cancelResetVoteButton").addEventListener("click", () => {
+      cleanup();
+      resolve(null);
+    });
+
+    dialog.querySelector("#confirmResetVoteButton").addEventListener("click", () => {
+      const selected = dialog.querySelector("#resetVoterSelect").value;
+      cleanup();
+      resolve(selected || null);
+    });
+  });
+}
+
 function getPlayersPlayerTalliesForGame(gameId) {
   const stats = gamePublicStats[gameId] || {};
   const tallies = stats.playersPlayerTallies || {};
@@ -529,13 +607,14 @@ function renderUserRoles() {
     .slice()
     .sort((a, b) => (a.displayName || a.email || "").localeCompare(b.displayName || b.email || ""))
     .forEach((profile) => {
+      const effectiveRole = normalizeRole(profile.role);
       const item = document.createElement("div");
       item.className = "list-item";
       const info = document.createElement("div");
-      const displayName = profile.displayName || profile.email || profile.id;
+      const displayName = getProfileDisplayName(profile);
       info.innerHTML = `
         <strong>${displayName}</strong>
-        <div class="meta">${profile.email || "No email"} | role: ${profile.role || "player"}</div>
+        <div class="meta">${profile.email || "No email"} | role: ${effectiveRole}</div>
       `;
       item.appendChild(info);
 
@@ -546,22 +625,34 @@ function renderUserRoles() {
       makeCoachButton.className = "btn secondary small";
       makeCoachButton.type = "button";
       makeCoachButton.textContent = "Make coach";
-      makeCoachButton.disabled = profile.role === "coach";
+      makeCoachButton.disabled = effectiveRole === "coach";
       makeCoachButton.addEventListener("click", async () => {
-        await updateDoc(doc(db, "users", profile.id), { role: "coach" });
-        await loadUserProfiles();
-        showMessage(`${displayName} is now a coach.`);
+        try {
+          await setDoc(doc(db, "users", profile.id), { role: "coach" }, { merge: true });
+          await ensurePlayerDocFromProfile(profile);
+          await loadUserProfiles();
+          await loadPlayers();
+          showMessage(`${displayName} is now a coach.`);
+        } catch (error) {
+          showMessage(`Unable to assign coach role: ${error.message}`, "error");
+        }
       });
 
       const makePlayerButton = document.createElement("button");
       makePlayerButton.className = "btn secondary small";
       makePlayerButton.type = "button";
       makePlayerButton.textContent = "Make player";
-      makePlayerButton.disabled = profile.role === "player" || profile.role === undefined;
+      makePlayerButton.disabled = effectiveRole === "player";
       makePlayerButton.addEventListener("click", async () => {
-        await updateDoc(doc(db, "users", profile.id), { role: "player" });
-        await loadUserProfiles();
-        showMessage(`${displayName} is now a player.`);
+        try {
+          await setDoc(doc(db, "users", profile.id), { role: "player" }, { merge: true });
+          await ensurePlayerDocFromProfile(profile);
+          await loadUserProfiles();
+          await loadPlayers();
+          showMessage(`${displayName} is now a player.`);
+        } catch (error) {
+          showMessage(`Unable to assign player role: ${error.message}`, "error");
+        }
       });
 
       actions.appendChild(makeCoachButton);
@@ -569,6 +660,20 @@ function renderUserRoles() {
       item.appendChild(actions);
       userRolesList.appendChild(item);
     });
+}
+
+async function ensurePlayerDocFromProfile(profile) {
+  const playerRef = doc(db, "players", profile.id);
+  await setDoc(
+    playerRef,
+    {
+      name: getProfileDisplayName(profile),
+      active: true,
+      userId: profile.id,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 function resetGameFormMode() {
