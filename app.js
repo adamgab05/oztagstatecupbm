@@ -1108,9 +1108,21 @@ onAuthStateChanged(auth, async (user) => {
     setAuthenticatedUI(true);
     try {
       await ensureUserProfile(user);
+    } catch (error) {
+      showMessage(`Unable to sync user profile: ${error.message}`, "error");
+    }
+
+    try {
       await ensureLoggedInUserIsPlayer(user);
-      setRoleUI();
-      openTab("voteTab");
+    } catch (error) {
+      // Non-blocking: voting/games should still load even if player sync fails.
+      showMessage(`Player sync warning: ${error.message}`, "error");
+    }
+
+    setRoleUI();
+    openTab("voteTab");
+
+    try {
       await loadPlayers();
       await loadGames();
       await loadPublicGameStats();
