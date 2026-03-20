@@ -1921,7 +1921,7 @@ async function mergePublicStatsAlias(primaryName, duplicateName) {
           displayNames,
           updatedAt: serverTimestamp(),
         },
-        { merge: true }
+        { merge: false }
       )
     );
   });
