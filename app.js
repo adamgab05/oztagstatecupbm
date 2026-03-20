@@ -205,44 +205,33 @@ function normalizePersonName(name) {
 }
 
 function canonicalizePlayerName(name) {
-  const normalized = normalizePersonName(name);
-  if (!normalized) return "";
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return "";
 
-  // Hard alias: collapse common short-name variant.
-  // This is needed because votes/tallies sometimes stored the email prefix (e.g. "Adam")
-  // rather than the full player label ("Adam Gabriel").
-  const adamAliasNorm = normalizePersonName("Adam");
-  const adamGabrielNorm = normalizePersonName("Adam Gabriel");
-  const adamGabrielCanonical =
-    players.find((p) => normalizePersonName(p.name) === adamGabrielNorm)?.name ||
-    "Adam Gabriel";
-  if (normalized === adamAliasNorm || normalized === adamGabrielNorm) {
-    return adamGabrielCanonical;
+  // Targeted display aliases for known duplicate name variants.
+  // Keep canonical labels as short names for all graphs/tallies.
+  const normalized = normalizePersonName(trimmed);
+  const aliasToShort = new Map([
+    ["adam", "Adam"],
+    ["adam gabriel", "Adam"],
+    ["rennie", "Rennie"],
+    ["rennie_bla", "Rennie"],
+    ["mark", "Mark"],
+    ["mark.barratt4", "Mark"],
+    ["mark.barrett4", "Mark"],
+    ["shannon", "Shan"],
+    ["shannonlegge", "Shan"],
+    ["shannonledge", "Shan"],
+    ["beki", "Beki"],
+    ["beki oliver", "Beki"],
+    ["beik oliver", "Beki"],
+    ["haweallan", "Allen"],
+  ]);
+  if (aliasToShort.has(normalized)) {
+    return aliasToShort.get(normalized);
   }
 
-  // If we have an email-prefix canonical map (coach/admin), prefer it.
-  if (emailPrefixCanonicalMap && emailPrefixCanonicalMap.size > 0) {
-    const byEmailPrefix = emailPrefixCanonicalMap.get(normalized);
-    if (byEmailPrefix) return byEmailPrefix;
-  }
-
-  // Prefer matching email prefix (because duplicates are often stored as the email prefix).
-  const emailCandidates = players
-    .filter((p) => normalizePersonName(p.emailPrefix) === normalized)
-    .map((p) => p.name)
-    .filter(Boolean);
-
-  if (emailCandidates.length > 0) {
-    // Choose the most "name-like" value (typically the full name has spaces and is longer).
-    return emailCandidates.sort((a, b) => String(b).length - String(a).length)[0];
-  }
-
-  const byName = players.find(
-    (p) => normalizePersonName(p.name) === normalized
-  );
-  if (byName) return byName.name;
-
-  return String(name).trim();
+  return trimmed;
 }
 
 function openTab(tabId) {
@@ -1139,20 +1128,50 @@ function renderReports() {
     });
   });
 
-  const defaultPpGameId = games[0]?.id || "";
+  const ALL_GAMES_OPTION = "__all_games__";
+  const defaultPpGameId = games[0]?.id || ALL_GAMES_OPTION;
 
-  function renderPpPerGameChart(gameId) {
-    const stats = gamePublicStats?.[gameId] || {};
-    const tallies = stats.playersPlayerTallies || {};
-    const displayNames = stats.displayNames || {};
-
+  function getPpTalliesForScope(scopeId) {
     const merged = {};
-    Object.entries(tallies).forEach(([key, count]) => {
-      const rawName = displayNames[key] || key.replace(/_/g, " ");
-      const canonical = canonicalizePlayerName(rawName);
-      if (!canonical) return;
-      merged[canonical] = (merged[canonical] || 0) + Number(count || 0);
-    });
+    let expectedTotalVotes = 0;
+    let talliedVotes = 0;
+
+    // Coach/admin can read raw votes, which is the source of truth.
+    // Players use public aggregates.
+    if (canSeeBestAndFairest && Array.isArray(votes) && votes.length > 0) {
+      const scopedVotes =
+        scopeId === ALL_GAMES_OPTION
+          ? votes
+          : votes.filter((vote) => vote.gameId === scopeId);
+
+      expectedTotalVotes = scopedVotes.length;
+      scopedVotes.forEach((vote) => {
+        const canonical = canonicalizePlayerName(vote.playersPlayer);
+        if (!canonical) return;
+        merged[canonical] = (merged[canonical] || 0) + 1;
+        talliedVotes += 1;
+      });
+    } else {
+      const statsList =
+        scopeId === ALL_GAMES_OPTION
+          ? games.map((g) => gamePublicStats?.[g.id] || {})
+          : [gamePublicStats?.[scopeId] || {}];
+
+      statsList.forEach((stats) => {
+        const tallies = stats.playersPlayerTallies || {};
+        const displayNames = stats.displayNames || {};
+        expectedTotalVotes += Number(stats.totalVotes || 0);
+
+        Object.entries(tallies).forEach(([key, count]) => {
+          const numericCount = Number(count || 0);
+          const rawName = displayNames[key] || key.replace(/_/g, " ");
+          const canonical = canonicalizePlayerName(rawName);
+          if (!canonical) return;
+          merged[canonical] = (merged[canonical] || 0) + numericCount;
+          talliedVotes += numericCount;
+        });
+      });
+    }
 
     // Ensure the chart includes every player, even if they received 0 votes.
     players.forEach((p) => {
@@ -1164,6 +1183,16 @@ function renderReports() {
     const entries = Object.entries(merged)
       .map(([name, total]) => ({ name, total: Number(total || 0) }))
       .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+
+    return {
+      entries,
+      expectedTotalVotes,
+      talliedVotes,
+    };
+  }
+
+  function renderPpPerGameChart(scopeId) {
+    const { entries } = getPpTalliesForScope(scopeId);
 
     if (entries.length === 0) {
       return "<p class='muted'>No votes yet.</p>";
@@ -1187,8 +1216,17 @@ function renderReports() {
       .join("");
   }
 
-  const ppPerGameOptionsHtml = games
-    .map((g) => `<option value="${g.id}">${g.label}</option>`)
+  function renderPpValidation(scopeId) {
+    const { expectedTotalVotes, talliedVotes } = getPpTalliesForScope(scopeId);
+    const ok = expectedTotalVotes === talliedVotes;
+    const prefix = scopeId === ALL_GAMES_OPTION ? "All games" : "Selected game";
+    return `${prefix} votes: expected ${expectedTotalVotes}, tallied ${talliedVotes}${ok ? "" : " (mismatch)"}`;
+  }
+
+  const ppPerGameOptionsHtml = [
+    `<option value="${ALL_GAMES_OPTION}">All Games</option>`,
+    ...games.map((g) => `<option value="${g.id}">${g.label}</option>`),
+  ]
     .join("");
 
   const bfRows = Object.entries(bfTotals)
@@ -1257,6 +1295,9 @@ function renderReports() {
         <select id="ppPerGameSelect" class="select">
           ${ppPerGameOptionsHtml}
         </select>
+        <p id="ppPerGameValidation" class="muted small" style="margin:8px 0 0;">
+          ${renderPpValidation(defaultPpGameId)}
+        </p>
         <div id="ppPerGameChart" class="chart" style="margin-top:10px;">
           ${renderPpPerGameChart(defaultPpGameId)}
         </div>
@@ -1270,9 +1311,12 @@ function renderReports() {
 
   const perGameSelect = document.getElementById("ppPerGameSelect");
   const perGameChart = document.getElementById("ppPerGameChart");
-  if (perGameSelect && perGameChart) {
+  const perGameValidation = document.getElementById("ppPerGameValidation");
+  if (perGameSelect && perGameChart && perGameValidation) {
+    perGameSelect.value = defaultPpGameId;
     perGameSelect.addEventListener("change", () => {
       perGameChart.innerHTML = renderPpPerGameChart(perGameSelect.value);
+      perGameValidation.textContent = renderPpValidation(perGameSelect.value);
     });
   }
 }
