@@ -17,6 +17,10 @@ service cloud.firestore {
       return signedIn() && (currentRole() == "coach" || currentRole() == "admin");
     }
 
+    function isAdmin() {
+      return signedIn() && currentRole() == "admin";
+    }
+
     match /users/{userId} {
       allow read: if isSelf(userId) || isCoachOrAdmin();
       allow create: if isSelf(userId)
@@ -42,7 +46,7 @@ service cloud.firestore {
       allow create: if signedIn()
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.gameId is string;
-      allow update, delete: if false;
+      allow update, delete: if isAdmin();
     }
 
     match /gamePublicStats/{gameId} {

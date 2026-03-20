@@ -19,6 +19,9 @@ import {
   deleteDoc,
   updateDoc,
   increment,
+  query,
+  where,
+  writeBatch,
   serverTimestamp,
   setDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -350,10 +353,136 @@ function renderGames() {
         showMessage(`Deleted ${game.label}.`);
       });
       actions.appendChild(deleteButton);
+
+      if (currentUserRole === "admin") {
+        const resetVotesButton = document.createElement("button");
+        resetVotesButton.className = "btn secondary small";
+        resetVotesButton.textContent = "Reset all votes";
+        resetVotesButton.type = "button";
+        resetVotesButton.addEventListener("click", async () => {
+          const confirmed = window.confirm(
+            `Reset all votes for ${game.label}? This cannot be undone.`
+          );
+          if (!confirmed) {
+            return;
+          }
+          try {
+            await resetVotesForGame(game);
+            await loadPublicGameStats();
+            await loadVotesForReports();
+            showMessage(`Votes reset for ${game.label}.`);
+          } catch (error) {
+            showMessage(`Unable to reset votes: ${error.message}`, "error");
+          }
+        });
+        actions.appendChild(resetVotesButton);
+
+        const resetSingleVoteButton = document.createElement("button");
+        resetSingleVoteButton.className = "btn secondary small";
+        resetSingleVoteButton.textContent = "Reset user vote";
+        resetSingleVoteButton.type = "button";
+        resetSingleVoteButton.addEventListener("click", async () => {
+          const userEmail = window
+            .prompt(
+              `Enter voter email to reset for ${game.label} (exact match):`
+            )
+            ?.trim()
+            .toLowerCase();
+          if (!userEmail) {
+            return;
+          }
+
+          try {
+            const result = await resetSingleVoteForGame(game, userEmail);
+            await loadPublicGameStats();
+            await loadVotesForReports();
+            if (result.deleted) {
+              showMessage(`Vote reset for ${userEmail} in ${game.label}.`);
+            } else {
+              showMessage(`No vote found for ${userEmail} in ${game.label}.`, "error");
+            }
+          } catch (error) {
+            showMessage(`Unable to reset user vote: ${error.message}`, "error");
+          }
+        });
+        actions.appendChild(resetSingleVoteButton);
+      }
       item.appendChild(actions);
     }
     gamesList.appendChild(item);
   });
+}
+
+async function resetVotesForGame(game) {
+  const voteQuery = query(
+    collection(db, "votes"),
+    where("gameId", "==", game.id)
+  );
+  const voteSnapshot = await getDocs(voteQuery);
+
+  if (!voteSnapshot.empty) {
+    const batch = writeBatch(db);
+    voteSnapshot.docs.forEach((entry) => {
+      batch.delete(entry.ref);
+    });
+    await batch.commit();
+  }
+
+  await setDoc(
+    doc(db, "gamePublicStats", game.id),
+    {
+      playersPlayerTallies: {},
+      displayNames: {},
+      totalVotes: 0,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+async function resetSingleVoteForGame(game, userEmail) {
+  const voteQuery = query(
+    collection(db, "votes"),
+    where("gameId", "==", game.id),
+    where("voterEmail", "==", userEmail)
+  );
+  const voteSnapshot = await getDocs(voteQuery);
+  if (voteSnapshot.empty) {
+    return { deleted: false };
+  }
+
+  const voteDoc = voteSnapshot.docs[0];
+  const voteData = voteDoc.data();
+  await deleteDoc(voteDoc.ref);
+
+  const playersPlayerName = voteData.playersPlayer;
+  if (playersPlayerName) {
+    const key = sanitizeFieldKey(playersPlayerName);
+    const statRef = doc(db, "gamePublicStats", game.id);
+    const statSnapshot = await getDoc(statRef);
+    if (statSnapshot.exists()) {
+      const statData = statSnapshot.data();
+      const tallies = { ...(statData.playersPlayerTallies || {}) };
+      const current = Number(tallies[key] || 0);
+      if (current <= 1) {
+        delete tallies[key];
+      } else {
+        tallies[key] = current - 1;
+      }
+      const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
+      await setDoc(
+        statRef,
+        {
+          playersPlayerTallies: tallies,
+          totalVotes,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  }
+
+  return { deleted: true };
 }
 
 function getPlayersPlayerTalliesForGame(gameId) {
@@ -770,6 +899,21 @@ function renderReports() {
     .sort((a, b) => b[1] - a[1])
     .map(([name, total]) => `<li>${name}: ${total}</li>`)
     .join("");
+  const sortedPpEntries = Object.entries(ppTotals).sort((a, b) => b[1] - a[1]);
+  const maxPp = sortedPpEntries[0]?.[1] || 1;
+  const ppChartRows = sortedPpEntries
+    .slice(0, 12)
+    .map(([name, total]) => {
+      const widthPercent = Math.max(4, Math.round((total / maxPp) * 100));
+      return `
+        <div class="bar-row">
+          <span class="bar-label">${name}</span>
+          <div class="bar-track"><div class="bar-fill accent" style="width:${widthPercent}%"></div></div>
+          <span class="bar-value">${total}</span>
+        </div>
+      `;
+    })
+    .join("");
   const gameRows = games
     .map((game) => `<li>${game.label} - ${formatGameMeta(game)}</li>`)
     .join("");
@@ -782,7 +926,26 @@ function renderReports() {
     .join("");
   const playerStatRows = Object.entries(playerGameStats)
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([name, stats]) => `<li>${name}: tries ${stats.tries}, BF appearances ${stats.gamesWithVotes}</li>`)
+    .map(([name, stats]) => {
+      const bfText = canSeeBestAndFairest ? `, BF appearances ${stats.gamesWithVotes}` : "";
+      return `<li>${name}: tries ${stats.tries}${bfText}</li>`;
+    })
+    .join("");
+  const sortedTries = Object.entries(playerGameStats)
+    .sort((a, b) => b[1].tries - a[1].tries)
+    .slice(0, 12);
+  const maxTries = sortedTries[0]?.[1]?.tries || 1;
+  const triesChartRows = sortedTries
+    .map(([name, stats]) => {
+      const widthPercent = Math.max(4, Math.round((stats.tries / maxTries) * 100));
+      return `
+        <div class="bar-row">
+          <span class="bar-label">${name}</span>
+          <div class="bar-track"><div class="bar-fill tries" style="width:${widthPercent}%"></div></div>
+          <span class="bar-value">${stats.tries}</span>
+        </div>
+      `;
+    })
     .join("");
 
   reportsContent.innerHTML = `
@@ -801,6 +964,10 @@ function renderReports() {
         <ol>${ppRows || "<li>No votes yet.</li>"}</ol>
       </div>
       <div class="report-card">
+        <h4>Players' Player graph</h4>
+        <div class="chart">${ppChartRows || "<p class='muted'>No votes yet.</p>"}</div>
+      </div>
+      <div class="report-card">
         <h4>Game scores</h4>
         <ul>${gameRows || "<li>No games yet.</li>"}</ul>
       </div>
@@ -811,6 +978,10 @@ function renderReports() {
       <div class="report-card">
         <h4>Player stats summary</h4>
         <ul>${playerStatRows || "<li>No player stats yet.</li>"}</ul>
+      </div>
+      <div class="report-card">
+        <h4>Try scorers graph</h4>
+        <div class="chart">${triesChartRows || "<p class='muted'>No player stats yet.</p>"}</div>
       </div>
     </div>
   `;
