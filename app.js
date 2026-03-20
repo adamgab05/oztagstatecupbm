@@ -196,8 +196,23 @@ function canonicalizePlayerName(name) {
   const normalized = normalizePersonName(name);
   if (!normalized) return "";
 
-  const match = players.find((p) => normalizePersonName(p.name) === normalized);
-  return match ? match.name : String(name).trim();
+  // Prefer matching email prefix (because duplicates are often stored as the email prefix).
+  const emailCandidates = players
+    .filter((p) => normalizePersonName(p.emailPrefix) === normalized)
+    .map((p) => p.name)
+    .filter(Boolean);
+
+  if (emailCandidates.length > 0) {
+    // Choose the most "name-like" value (typically the full name has spaces and is longer).
+    return emailCandidates.sort((a, b) => String(b).length - String(a).length)[0];
+  }
+
+  const byName = players.find(
+    (p) => normalizePersonName(p.name) === normalized
+  );
+  if (byName) return byName.name;
+
+  return String(name).trim();
 }
 
 function openTab(tabId) {
@@ -715,12 +730,15 @@ function renderUserRoles() {
 
 async function ensurePlayerDocFromProfile(profile) {
   const playerRef = doc(db, "players", profile.id);
+  const emailPrefix =
+    (profile.email || "").split("@")[0]?.trim().toLowerCase() || "";
   await setDoc(
     playerRef,
     {
       name: getProfileDisplayName(profile),
       active: true,
       userId: profile.id,
+      emailPrefix: emailPrefix || null,
       updatedAt: serverTimestamp(),
     },
     { merge: true }
@@ -823,6 +841,8 @@ async function ensureLoggedInUserIsPlayer(user) {
   const profileRef = doc(db, "users", user.uid);
   const profileSnapshot = await getDoc(profileRef);
   const profileData = profileSnapshot.exists() ? profileSnapshot.data() : {};
+  const emailPrefix =
+    (user.email || "").split("@")[0]?.trim().toLowerCase() || "";
 
   const playerRef = doc(db, "players", user.uid);
   const playerSnapshot = await getDoc(playerRef);
@@ -836,6 +856,18 @@ async function ensureLoggedInUserIsPlayer(user) {
     if (playerData.name && playerData.name !== profileData.displayName) {
       await setDoc(profileRef, { displayName: playerData.name }, { merge: true });
     }
+
+    // Ensure emailPrefix is present for email-based canonicalization.
+    await setDoc(
+      playerRef,
+      {
+        emailPrefix,
+        userId: user.uid,
+        active: true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
     return;
   }
 
@@ -856,6 +888,15 @@ async function ensureLoggedInUserIsPlayer(user) {
   if (existingPlayerDoc) {
     // Link the existing manually created player record to this user's UID
     await updateDoc(existingPlayerDoc.ref, { userId: user.uid, active: true });
+
+    // Also store emailPrefix so future merges are stable.
+    if (emailPrefix) {
+      await setDoc(
+        existingPlayerDoc.ref,
+        { emailPrefix, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    }
     
     // Sync the user profile name to match the coach's spelling just to be safe
     if (existingPlayerDoc.data().name !== profileData.displayName) {
@@ -867,6 +908,7 @@ async function ensureLoggedInUserIsPlayer(user) {
       name: fallbackName,
       active: true,
       userId: user.uid,
+      emailPrefix: emailPrefix || null,
       createdAt: serverTimestamp(),
     });
   }
@@ -1234,7 +1276,9 @@ async function decrementPlayersPlayerPublicTally(gameId, voteData) {
     return;
   }
 
-  const key = sanitizeFieldKey(playersPlayerName);
+  const canonicalName = canonicalizePlayerName(playersPlayerName);
+  if (!canonicalName) return;
+  const key = sanitizeFieldKey(canonicalName);
   const statRef = doc(db, "gamePublicStats", gameId);
   const statSnapshot = await getDoc(statRef);
 
@@ -1322,6 +1366,7 @@ if (profileForm) {
           name,
           active: true,
           userId: user.uid,
+          emailPrefix: (user.email || "").split("@")[0]?.trim().toLowerCase() || null,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -1402,13 +1447,52 @@ async function loadUserProfiles() {
   renderUserRoles();
 }
 
+async function backfillPlayerEmailPrefixes() {
+  if (!isAtLeastRole("coach")) return;
+  if (!players || players.length === 0) return;
+
+  // Coach/admin can read `users` docs; players cannot.
+  const usersSnapshot = await getDocs(collection(db, "users"));
+  const prefixByUid = new Map(
+    usersSnapshot.docs.map((docEntry) => {
+      const data = docEntry.data() || {};
+      const prefix = (data.email || "")
+        .split("@")[0]
+        ?.trim()
+        .toLowerCase();
+      return [docEntry.id, prefix || ""];
+    })
+  );
+
+  const updates = [];
+  players.forEach((player) => {
+    const linkedUid = player.userId || player.id;
+    const prefix = prefixByUid.get(linkedUid) || "";
+    if (!prefix) return;
+    if ((player.emailPrefix || "")?.toLowerCase() === prefix) return;
+    updates.push(
+      setDoc(
+        doc(db, "players", player.id),
+        { emailPrefix: prefix, updatedAt: serverTimestamp() },
+        { merge: true }
+      )
+    );
+  });
+
+  if (updates.length > 0) {
+    await Promise.all(updates);
+  }
+}
+
 async function recordPublicPlayersPlayerTally(gameId, playerName) {
-  const key = sanitizeFieldKey(playerName);
+  const canonicalName = canonicalizePlayerName(playerName) || "";
+  if (!canonicalName) return;
+  const key = sanitizeFieldKey(canonicalName);
   const statRef = doc(db, "gamePublicStats", gameId);
   try {
     await updateDoc(statRef, {
       [`playersPlayerTallies.${key}`]: increment(1),
-      [`displayNames.${key}`]: playerName,
+      [`displayNames.${key}`]: canonicalName,
       totalVotes: increment(1),
       updatedAt: serverTimestamp(),
     });
@@ -1417,7 +1501,7 @@ async function recordPublicPlayersPlayerTally(gameId, playerName) {
       statRef,
       {
         playersPlayerTallies: { [key]: 1 },
-        displayNames: { [key]: playerName },
+        displayNames: { [key]: canonicalName },
         totalVotes: 1,
         updatedAt: serverTimestamp(),
       },
@@ -1819,6 +1903,7 @@ onAuthStateChanged(auth, async (user) => {
 
     try {
       await loadPlayers();
+      await backfillPlayerEmailPrefixes();
       await loadMyVotes();
       await loadGames();
       await loadPublicGameStats();
