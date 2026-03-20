@@ -80,6 +80,7 @@ const reportsContent = document.getElementById("reportsContent");
 const rebuildPublicStatsButton = document.getElementById(
   "rebuildPublicStatsButton"
 );
+const mergeAdamAliasButton = document.getElementById("mergeAdamAliasButton");
 
 const profileForm = document.getElementById("profileForm");
 const profileEmailInput = document.getElementById("profileEmail");
@@ -169,6 +170,9 @@ function setRoleUI() {
 
   if (rebuildPublicStatsButton) {
     rebuildPublicStatsButton.classList.toggle("hidden", !canManage);
+  }
+  if (mergeAdamAliasButton) {
+    mergeAdamAliasButton.classList.toggle("hidden", !canManage);
   }
 
   const activeTabButton = tabButtons.find((button) => button.classList.contains("active"));
@@ -1792,6 +1796,83 @@ if (rebuildPublicStatsButton) {
       showMessage(`Rebuild failed: ${error.message}`, "error");
     }
   });
+}
+
+if (mergeAdamAliasButton) {
+  mergeAdamAliasButton.addEventListener("click", async () => {
+    clearMessage();
+    try {
+      await mergePublicStatsAlias("Adam Gabriel", "Adam");
+      await loadPublicGameStats();
+      await loadVotesForReports();
+      showMessage("Merged “Adam” into “Adam Gabriel” in public graphs.");
+    } catch (error) {
+      showMessage(
+        `Merge failed: ${error.message || String(error)}`,
+        "error"
+      );
+    }
+  });
+}
+
+async function mergePublicStatsAlias(primaryName, duplicateName) {
+  if (!primaryName || !duplicateName || primaryName === duplicateName) return;
+
+  const primaryNorm = normalizePersonName(primaryName);
+  const duplicateNorm = normalizePersonName(duplicateName);
+
+  const statsSnapshot = await getDocs(collection(db, "gamePublicStats"));
+  const tasks = [];
+
+  statsSnapshot.docs.forEach((statDoc) => {
+    const statData = statDoc.data() || {};
+    const tallies = { ...(statData.playersPlayerTallies || {}) };
+    const displayNames = { ...(statData.displayNames || {}) };
+
+    // Find tally keys whose display label matches the duplicate.
+    const dupKeys = Object.keys(tallies).filter((key) => {
+      const label = displayNames[key] || key.replace(/_/g, " ");
+      return normalizePersonName(label) === duplicateNorm;
+    });
+
+    if (dupKeys.length === 0) return;
+
+    // Find (or create) the primary tally key.
+    let primKeys = Object.keys(tallies).filter((key) => {
+      const label = displayNames[key] || key.replace(/_/g, " ");
+      return normalizePersonName(label) === primaryNorm;
+    });
+    primKeys = primKeys.length ? primKeys : [];
+
+    const primKey = primKeys.length ? primKeys[0] : sanitizeFieldKey(primaryName);
+    const movedTotal = dupKeys.reduce((sum, k) => sum + Number(tallies[k] || 0), 0);
+
+    // Remove duplicate keys.
+    dupKeys.forEach((k) => {
+      delete tallies[k];
+      delete displayNames[k];
+    });
+
+    // Add into primary.
+    tallies[primKey] = Number(tallies[primKey] || 0) + movedTotal;
+    displayNames[primKey] = primaryName;
+
+    tasks.push(
+      setDoc(
+        statDoc.ref,
+        {
+          playersPlayerTallies: tallies,
+          displayNames,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      )
+    );
+  });
+
+  if (tasks.length > 0) {
+    await Promise.all(tasks);
+  }
 }
 
 loginForm.addEventListener("submit", async (event) => {
