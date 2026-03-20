@@ -60,7 +60,9 @@ const gameTimeInput = document.getElementById("gameTimeInput");
 const opponentInput = document.getElementById("opponentInput");
 const ourScoreInput = document.getElementById("ourScoreInput");
 const opponentScoreInput = document.getElementById("opponentScoreInput");
-const tryScorersSelect = document.getElementById("tryScorersSelect");
+const tryScorerPicker = document.getElementById("tryScorerPicker");
+const addTryScorerButton = document.getElementById("addTryScorerButton");
+const tryScorersList = document.getElementById("tryScorersList");
 const saveGameButton = document.getElementById("saveGameButton");
 const cancelEditGameButton = document.getElementById("cancelEditGameButton");
 const gamesList = document.getElementById("gamesList");
@@ -78,6 +80,7 @@ let votes = [];
 let gamePublicStats = {};
 let userProfiles = [];
 let editingGameId = null;
+let gameFormTryScorers = [];
 
 const roleRank = {
   player: 1,
@@ -159,14 +162,69 @@ function openTab(tabId) {
   });
 }
 
-function setMultiSelectOptions(selectEl, allPlayers) {
-  selectEl.innerHTML = allPlayers
+function setTryScorerPickerOptions(allPlayers) {
+  tryScorerPicker.innerHTML = `<option value="">Select player...</option>${allPlayers
     .map((player) => `<option value="${player.name}">${player.name}</option>`)
-    .join("");
-  // Ensure no default browser auto-selection for multi-select fields.
-  [...selectEl.options].forEach((option) => {
-    option.selected = false;
+    .join("")}`;
+}
+
+function renderTryScorersList() {
+  tryScorersList.innerHTML = "";
+  if (gameFormTryScorers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "meta";
+    empty.textContent = "No try scorers added.";
+    tryScorersList.appendChild(empty);
+    return;
+  }
+
+  gameFormTryScorers.forEach((name) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<strong>${name}</strong>`;
+
+    const actions = document.createElement("div");
+    actions.className = "list-actions";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn danger small";
+    remove.textContent = "- Remove";
+    remove.addEventListener("click", () => {
+      gameFormTryScorers = gameFormTryScorers.filter((entry) => entry !== name);
+      renderTryScorersList();
+    });
+    actions.appendChild(remove);
+    row.appendChild(actions);
+    tryScorersList.appendChild(row);
   });
+}
+
+function syncTryScorersWithPlayers() {
+  const validNames = new Set(players.map((player) => player.name));
+  gameFormTryScorers = gameFormTryScorers.filter((name) => validNames.has(name));
+  renderTryScorersList();
+}
+
+function clearTryScorersFormState() {
+  gameFormTryScorers = [];
+  tryScorerPicker.value = "";
+  renderTryScorersList();
+}
+
+function addTryScorerFromPicker() {
+  const selectedName = tryScorerPicker.value;
+  if (!selectedName) {
+    showMessage("Select a player before adding a try scorer.", "error");
+    return;
+  }
+  if (gameFormTryScorers.includes(selectedName)) {
+    showMessage("That try scorer has already been added.", "error");
+    return;
+  }
+
+  gameFormTryScorers.push(selectedName);
+  tryScorerPicker.value = "";
+  renderTryScorersList();
 }
 
 function renderPlayers() {
@@ -268,10 +326,9 @@ function renderGames() {
         opponentScoreInput.value =
           Number.isInteger(game.opponentScore) ? String(game.opponentScore) : "";
 
-        const tryScorers = new Set(game.tryScorers || []);
-        [...tryScorersSelect.options].forEach((option) => {
-          option.selected = tryScorers.has(option.value);
-        });
+        gameFormTryScorers = [...new Set(game.tryScorers || [])];
+        renderTryScorersList();
+        tryScorerPicker.value = "";
 
         saveGameButton.textContent = "Save changes";
         cancelEditGameButton.classList.remove("hidden");
@@ -384,9 +441,7 @@ function renderUserRoles() {
 function resetGameFormMode() {
   editingGameId = null;
   createGameForm.reset();
-  [...tryScorersSelect.options].forEach((option) => {
-    option.selected = false;
-  });
+  clearTryScorersFormState();
   saveGameButton.textContent = "Create game";
   cancelEditGameButton.classList.add("hidden");
 }
@@ -523,7 +578,8 @@ async function loadPlayers() {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   renderPlayers();
-  setMultiSelectOptions(tryScorersSelect, players);
+  setTryScorerPickerOptions(players);
+  syncTryScorersWithPlayers();
 }
 
 async function seedGamesIfEmpty() {
@@ -915,10 +971,7 @@ createGameForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  const selectedTryScorers = [...tryScorersSelect.selectedOptions].map(
-    (option) => option.value
-  );
-  const uniqueTryScorers = [...new Set(selectedTryScorers)];
+  const uniqueTryScorers = [...new Set(gameFormTryScorers)];
   const ourScore = ourScoreInput.value === "" ? null : Number(ourScoreInput.value);
   const opponentScore =
     opponentScoreInput.value === "" ? null : Number(opponentScoreInput.value);
@@ -959,6 +1012,11 @@ createGameForm.addEventListener("submit", async (event) => {
 cancelEditGameButton.addEventListener("click", () => {
   resetGameFormMode();
   showMessage("Edit cancelled.");
+});
+
+addTryScorerButton.addEventListener("click", () => {
+  clearMessage();
+  addTryScorerFromPicker();
 });
 
 voteForm.addEventListener("submit", async (event) => {

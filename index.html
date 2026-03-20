@@ -143,8 +143,14 @@
             <input id="opponentScoreInput" type="number" min="0" placeholder="Opponent score" />
             <label for="opponentInput">Opponent</label>
             <input id="opponentInput" type="text" placeholder="Opponent team name" />
-            <label for="tryScorersSelect">Try scorers</label>
-            <select id="tryScorersSelect" multiple size="6"></select>
+            <label for="tryScorerPicker">Try scorers</label>
+            <div class="inline-form">
+              <select id="tryScorerPicker">
+                <option value="">Select player...</option>
+              </select>
+              <button id="addTryScorerButton" type="button" class="btn secondary">+ Add</button>
+            </div>
+            <div id="tryScorersList" class="list"></div>
             <div class="list-actions">
               <button id="saveGameButton" type="submit" class="btn">Create game</button>
               <button id="cancelEditGameButton" type="button" class="btn secondary hidden">Cancel edit</button>
