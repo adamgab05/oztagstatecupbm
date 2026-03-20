@@ -1495,8 +1495,21 @@ async function buildEmailPrefixCanonicalMap() {
     const prefixNorm = normalizePersonName(prefix);
     if (!prefixNorm) return;
 
+    // Candidates may exist under different shapes:
+    // - linked by userId (normal)
+    // - saved as email-prefix string (name == prefix)
+    // - have emailPrefix backfilled (emailPrefix == prefix)
     const candidates = players
-      .filter((p) => p.userId === user.uid || p.id === user.uid)
+      .filter((p) => {
+        const pNameNorm = normalizePersonName(p.name);
+        const pEmailPrefixNorm = normalizePersonName(p.emailPrefix);
+        return (
+          p.userId === user.uid ||
+          p.id === user.uid ||
+          pNameNorm === prefixNorm ||
+          pEmailPrefixNorm === prefixNorm
+        );
+      })
       .filter((p) => p.active !== false);
 
     if (!candidates || candidates.length === 0) return;
@@ -1506,13 +1519,16 @@ async function buildEmailPrefixCanonicalMap() {
     );
 
     const list = nonPrefixCandidates.length > 0 ? nonPrefixCandidates : candidates;
+    // Prefer the most "full name-like" label:
+    // - more length
+    // - if length ties, more spaces
     list.sort((a, b) => {
       const aName = String(a.name || "");
       const bName = String(b.name || "");
+      if (bName.length !== aName.length) return bName.length - aName.length;
       const aSpaces = (aName.match(/\s/g) || []).length;
       const bSpaces = (bName.match(/\s/g) || []).length;
-      if (bSpaces !== aSpaces) return bSpaces - aSpaces;
-      return bName.length - aName.length;
+      return bSpaces - aSpaces;
     });
 
     const canonicalName = String(list[0].name || "").trim();
