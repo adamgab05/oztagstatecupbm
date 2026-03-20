@@ -2,7 +2,6 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import {
   getAuth,
   GoogleAuthProvider,
-  EmailAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -10,6 +9,7 @@ import {
   onAuthStateChanged,
   updateProfile,
   deleteUser,
+  EmailAuthProvider,
   reauthenticateWithCredential,
   reauthenticateWithPopup,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -59,6 +59,7 @@ const playerNameInput = document.getElementById("playerNameInput");
 const playersList = document.getElementById("playersList");
 const roleManagerSection = document.getElementById("roleManagerSection");
 const userRolesList = document.getElementById("userRolesList");
+const runMigrationBtn = document.getElementById("runMigrationBtn");
 
 const createGameForm = document.getElementById("createGameForm");
 const gameLabelInput = document.getElementById("gameLabelInput");
@@ -92,6 +93,7 @@ let currentUserRole = "player";
 let players = [];
 let games = [];
 let votes = [];
+let myVotes = []; 
 let gamePublicStats = {};
 let userProfiles = [];
 let editingGameId = null;
@@ -131,13 +133,10 @@ function setAuthenticatedUI(isAuthenticated) {
   siteHeader.classList.toggle("hidden", !isAuthenticated);
 }
 
-function setOptions(selectEl, players) {
+function setOptions(selectEl, playersListArray) {
   const first = '<option value="">Select player...</option>';
-  const options = players
-    .map(
-      (player) =>
-        `<option value="${player.name}">${player.name}</option>`
-    )
+  const options = playersListArray
+    .map((player) => `<option value="${player.name}">${player.name}</option>`)
     .join("");
   selectEl.innerHTML = first + options;
 }
@@ -150,6 +149,7 @@ function setRoleUI() {
   userRoleBadge.textContent = `Role: ${currentUserRole}`;
   const canManage = isAtLeastRole("coach");
   const isAdmin = currentUserRole === "admin";
+  
   const playersTabButton = tabButtons.find((btn) => btn.dataset.tab === "playersTab");
   const gamesTabButton = tabButtons.find((btn) => btn.dataset.tab === "gamesTab");
   const reportsTabButton = tabButtons.find((btn) => btn.dataset.tab === "reportsTab");
@@ -161,6 +161,7 @@ function setRoleUI() {
   addPlayerForm.classList.toggle("hidden", !canManage);
   createGameForm.classList.toggle("hidden", !canManage);
   roleManagerSection.classList.toggle("hidden", !isAdmin);
+  runMigrationBtn.classList.toggle("hidden", !isAdmin);
 
   const activeTabButton = tabButtons.find((button) => button.classList.contains("active"));
   if (activeTabButton && activeTabButton.classList.contains("hidden")) {
@@ -170,91 +171,6 @@ function setRoleUI() {
 
 function sanitizeFieldKey(value) {
   return value.replace(/[.#$/[\]]/g, "_");
-}
-
-async function decrementPlayersPlayerPublicTally(gameId, voteData) {
-  const playersPlayerName = voteData?.playersPlayer;
-  if (!playersPlayerName || !gameId) {
-    return;
-  }
-  const key = sanitizeFieldKey(playersPlayerName);
-  const statRef = doc(db, "gamePublicStats", gameId);
-  const statSnapshot = await getDoc(statRef);
-  if (!statSnapshot.exists()) {
-    return;
-  }
-  const statData = statSnapshot.data();
-  const tallies = { ...(statData.playersPlayerTallies || {}) };
-  const current = Number(tallies[key] || 0);
-  if (current <= 1) {
-    delete tallies[key];
-  } else {
-    tallies[key] = current - 1;
-  }
-  const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
-  await setDoc(
-    statRef,
-    {
-      playersPlayerTallies: tallies,
-      totalVotes,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
-}
-
-function hasPasswordProvider(user) {
-  return user?.providerData?.some((p) => p.providerId === "password");
-}
-
-function hasGoogleProvider(user) {
-  return user?.providerData?.some((p) => p.providerId === "google.com");
-}
-
-function populateProfileFields(user) {
-  profileEmailInput.value = user.email || "";
-  const display =
-    (user.displayName || "").trim() ||
-    (user.email || "").split("@")[0] ||
-    "";
-  profileDisplayNameInput.value = display;
-
-  const pwd = hasPasswordProvider(user);
-  const google = hasGoogleProvider(user);
-  deleteReauthEmailWrap.classList.toggle("hidden", !pwd);
-  deleteReauthGoogleNote.classList.toggle("hidden", !google || pwd);
-  deleteAccountPasswordInput.value = "";
-}
-
-async function deleteFirestoreDataForUser(uid) {
-  const voteQuery = query(collection(db, "votes"), where("userId", "==", uid));
-  const voteSnapshot = await getDocs(voteQuery);
-
-  for (const voteDoc of voteSnapshot.docs) {
-    const data = voteDoc.data();
-    await decrementPlayersPlayerPublicTally(data.gameId, data);
-    await deleteDoc(voteDoc.ref);
-  }
-
-  await deleteDoc(doc(db, "users", uid));
-  await deleteDoc(doc(db, "players", uid));
-}
-
-async function reauthenticateForSensitiveAction(user) {
-  if (hasPasswordProvider(user) && user.email) {
-    const password = deleteAccountPasswordInput.value;
-    if (!password) {
-      throw new Error("Enter your password to delete your account.");
-    }
-    const credential = EmailAuthProvider.credential(user.email, password);
-    await reauthenticateWithCredential(user, credential);
-    return;
-  }
-  if (hasGoogleProvider(user)) {
-    await reauthenticateWithPopup(auth, googleProvider);
-    return;
-  }
-  throw new Error("This account cannot be re-authenticated from this screen.");
 }
 
 function normalizeRole(roleValue) {
@@ -379,7 +295,19 @@ function renderPlayers() {
           return;
         }
 
+        // MODIFIED: Update the player collection
         await updateDoc(doc(db, "players", player.id), { name: trimmedName });
+        
+        // MODIFIED: Simultaneously update the users collection so they stay in perfect sync
+        const targetUserId = player.userId || player.id; 
+        if (targetUserId) {
+          try {
+            await setDoc(doc(db, "users", targetUserId), { displayName: trimmedName }, { merge: true });
+          } catch (e) {
+            // Ignore if the user document doesn't exist yet
+          }
+        }
+
         await loadPlayers();
         await loadGames();
         showMessage(`Updated player to ${trimmedName}.`);
@@ -479,6 +407,8 @@ function renderGames() {
             await resetVotesForGame(game);
             await loadPublicGameStats();
             await loadVotesForReports();
+            await loadMyVotes();
+            renderVoteGameSelect();
             showMessage(`Votes reset for ${game.label}.`);
           } catch (error) {
             showMessage(`Unable to reset votes: ${error.message}`, "error");
@@ -499,6 +429,8 @@ function renderGames() {
             const result = await resetSingleVoteForGame(game, userEmail);
             await loadPublicGameStats();
             await loadVotesForReports();
+            await loadMyVotes();
+            renderVoteGameSelect();
             if (result.deleted) {
               showMessage(`Vote reset for ${userEmail} in ${game.label}.`);
             } else {
@@ -556,8 +488,34 @@ async function resetSingleVoteForGame(game, userEmail) {
 
   const voteDoc = voteSnapshot.docs[0];
   const voteData = voteDoc.data();
-  await decrementPlayersPlayerPublicTally(game.id, voteData);
   await deleteDoc(voteDoc.ref);
+
+  const playersPlayerName = voteData.playersPlayer;
+  if (playersPlayerName) {
+    const key = sanitizeFieldKey(playersPlayerName);
+    const statRef = doc(db, "gamePublicStats", game.id);
+    const statSnapshot = await getDoc(statRef);
+    if (statSnapshot.exists()) {
+      const statData = statSnapshot.data();
+      const tallies = { ...(statData.playersPlayerTallies || {}) };
+      const current = Number(tallies[key] || 0);
+      if (current <= 1) {
+        delete tallies[key];
+      } else {
+        tallies[key] = current - 1;
+      }
+      const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
+      await setDoc(
+        statRef,
+        {
+          playersPlayerTallies: tallies,
+          totalVotes,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  }
 
   return { deleted: true };
 }
@@ -838,38 +796,57 @@ async function ensureUserProfile(user) {
   currentUserRole = data.role || "player";
 }
 
+// MODIFIED: Reverses the sync logic to preserve manual edits
 async function ensureLoggedInUserIsPlayer(user) {
   const profileRef = doc(db, "users", user.uid);
   const profileSnapshot = await getDoc(profileRef);
   const profileData = profileSnapshot.exists() ? profileSnapshot.data() : {};
-  const fullName =
+
+  const playerRef = doc(db, "players", user.uid);
+  const playerSnapshot = await getDoc(playerRef);
+
+  // SCENARIO 1: The user already has a linked player record by their UID.
+  if (playerSnapshot.exists()) {
+    const playerData = playerSnapshot.data();
+    
+    // If the coach manually updated the player's name in the Manager, sync that 
+    // BACK to the user profile instead of overwriting the player record with the email alias!
+    if (playerData.name && playerData.name !== profileData.displayName) {
+      await setDoc(profileRef, { displayName: playerData.name }, { merge: true });
+    }
+    return;
+  }
+
+  // SCENARIO 2: No player record linked to this UID yet. We need to find or create one.
+  const fallbackName =
     (profileData.displayName || "").trim() ||
     (user.displayName || "").trim() ||
     (user.email || "").split("@")[0] ||
     "Unknown Player";
 
-  const playerRef = doc(db, "players", user.uid);
-  const playerSnapshot = await getDoc(playerRef);
-  if (!playerSnapshot.exists()) {
+  const playersCol = collection(db, "players");
+  const allPlayersSnapshot = await getDocs(playersCol);
+
+  const existingPlayerDoc = allPlayersSnapshot.docs.find(doc => 
+    (doc.data().name || "").trim().toLowerCase() === fallbackName.toLowerCase()
+  );
+
+  if (existingPlayerDoc) {
+    // Link the existing manually created player record to this user's UID
+    await updateDoc(existingPlayerDoc.ref, { userId: user.uid, active: true });
+    
+    // Sync the user profile name to match the coach's spelling just to be safe
+    if (existingPlayerDoc.data().name !== profileData.displayName) {
+      await setDoc(profileRef, { displayName: existingPlayerDoc.data().name }, { merge: true });
+    }
+  } else {
+    // Create a brand new player record
     await setDoc(playerRef, {
-      name: fullName,
+      name: fallbackName,
       active: true,
       userId: user.uid,
       createdAt: serverTimestamp(),
     });
-    return;
-  }
-
-  const playerData = playerSnapshot.data();
-  if (playerData.name !== fullName) {
-    await setDoc(
-      playerRef,
-      {
-        name: fullName,
-        active: true,
-      },
-      { merge: true }
-    );
   }
 }
 
@@ -877,77 +854,15 @@ async function seedPlayersIfEmpty() {
   return;
 }
 
-function getLinkedPlayerUids(playerList) {
-  const uids = new Set();
-  playerList.forEach((p) => {
-    uids.add(p.id);
-    if (p.userId) {
-      uids.add(p.userId);
-    }
-  });
-  return uids;
-}
-
-/**
- * Ensures every Firestore user has a matching players/{uid} doc (coach/admin can write).
- * Fixes users who appear in User Role Manager but never got a roster row (e.g. failed first-login sync).
- */
-async function syncMissingPlayersFromUserProfiles() {
-  if (!isAtLeastRole("coach")) {
-    return;
-  }
-
-  const linkedUids = getLinkedPlayerUids(players);
-  const usersSnapshot = await getDocs(collection(db, "users"));
-
-  const pending = [];
-  usersSnapshot.docs.forEach((userDoc) => {
-    const uid = userDoc.id;
-    if (linkedUids.has(uid)) {
-      return;
-    }
-    const data = userDoc.data();
-    const profile = { id: uid, ...data };
-    linkedUids.add(uid);
-    pending.push(
-      setDoc(
-        doc(db, "players", uid),
-        {
-          name: getProfileDisplayName(profile),
-          active: true,
-          userId: uid,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      )
-    );
-  });
-
-  if (pending.length > 0) {
-    await Promise.all(pending);
-  }
-}
-
 async function loadPlayers() {
   await seedPlayersIfEmpty();
-  let snapshot = await getDocs(collection(db, "players"));
+  const snapshot = await getDocs(collection(db, "players"));
   players = snapshot.docs
     .map((entry) => ({
       id: entry.id,
       ...entry.data(),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-
-  await syncMissingPlayersFromUserProfiles();
-
-  snapshot = await getDocs(collection(db, "players"));
-  players = snapshot.docs
-    .map((entry) => ({
-      id: entry.id,
-      ...entry.data(),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
   renderPlayers();
   setTryScorerPickerOptions(players);
   syncTryScorersWithPlayers();
@@ -1003,9 +918,32 @@ async function ensureScheduledGames() {
   }
 }
 
+async function loadMyVotes() {
+  const user = auth.currentUser;
+  if (!user) return;
+  try {
+    const q = query(collection(db, "votes"), where("userId", "==", user.uid));
+    const snapshot = await getDocs(q);
+    myVotes = snapshot.docs.map((entry) => entry.data().gameId);
+  } catch (error) {
+    console.warn("Could not load user votes:", error);
+  }
+}
+
+function renderVoteGameSelect() {
+  const options = games.map((game) => {
+    const hasVoted = myVotes.includes(game.id);
+    return `<option value="${game.id}" ${hasVoted ? 'disabled' : ''}>${game.label}${hasVoted ? ' (Voted)' : ''}</option>`;
+  });
+  voteGameSelect.innerHTML = `<option value="">Select a game...</option>${options.join("")}`;
+}
+
 async function loadGames() {
-  await seedGamesIfEmpty();
-  await ensureScheduledGames();
+  if (isAtLeastRole("coach")) {
+    await seedGamesIfEmpty();
+    await ensureScheduledGames();
+  }
+  
   const snapshot = await getDocs(collection(db, "games"));
   games = snapshot.docs.map((entry) => ({
     id: entry.id,
@@ -1013,10 +951,7 @@ async function loadGames() {
   }))
   .sort((a, b) => (a.kickoffOrder || 999) - (b.kickoffOrder || 999));
 
-  voteGameSelect.innerHTML = `<option value="">Select a game...</option>${games
-    .map((game) => `<option value="${game.id}">${game.label}</option>`)
-    .join("")}`;
-
+  renderVoteGameSelect();
   renderGames();
 }
 
@@ -1225,6 +1160,173 @@ function renderReports() {
   `;
 }
 
+function hasPasswordProvider(user) {
+  return user?.providerData?.some((p) => p.providerId === "password");
+}
+
+function hasGoogleProvider(user) {
+  return user?.providerData?.some((p) => p.providerId === "google.com");
+}
+
+function populateProfileFields(user) {
+  if (!profileEmailInput || !profileDisplayNameInput) return;
+
+  profileEmailInput.value = user.email || "";
+  profileDisplayNameInput.value =
+    (user.displayName || "").trim() ||
+    (user.email || "").split("@")[0] ||
+    "";
+
+  if (deleteReauthEmailWrap) {
+    deleteReauthEmailWrap.classList.toggle("hidden", !hasPasswordProvider(user));
+  }
+  if (deleteReauthGoogleNote) {
+    deleteReauthGoogleNote.classList.toggle(
+      "hidden",
+      !hasGoogleProvider(user) || hasPasswordProvider(user)
+    );
+  }
+  if (deleteAccountPasswordInput) {
+    deleteAccountPasswordInput.value = "";
+  }
+}
+
+async function decrementPlayersPlayerPublicTally(gameId, voteData) {
+  const playersPlayerName = voteData?.playersPlayer;
+  if (!playersPlayerName || !gameId) {
+    return;
+  }
+
+  const key = sanitizeFieldKey(playersPlayerName);
+  const statRef = doc(db, "gamePublicStats", gameId);
+  const statSnapshot = await getDoc(statRef);
+
+  if (!statSnapshot.exists()) return;
+  const statData = statSnapshot.data();
+
+  const tallies = { ...(statData.playersPlayerTallies || {}) };
+  const current = Number(tallies[key] || 0);
+
+  if (current <= 1) {
+    delete tallies[key];
+  } else {
+    tallies[key] = current - 1;
+  }
+
+  const totalVotes = Math.max(0, Number(statData.totalVotes || 0) - 1);
+
+  await setDoc(
+    statRef,
+    {
+      playersPlayerTallies: tallies,
+      totalVotes,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+async function deleteFirestoreDataForUser(uid) {
+  // Delete all votes made by this user, while keeping the public tallies consistent.
+  const voteQuery = query(collection(db, "votes"), where("userId", "==", uid));
+  const voteSnapshot = await getDocs(voteQuery);
+
+  for (const voteDoc of voteSnapshot.docs) {
+    const data = voteDoc.data();
+    await decrementPlayersPlayerPublicTally(data.gameId, data);
+    await deleteDoc(voteDoc.ref);
+  }
+
+  await deleteDoc(doc(db, "users", uid));
+  await deleteDoc(doc(db, "players", uid));
+}
+
+async function reauthenticateForSensitiveAction(user) {
+  // For password accounts, prompt + reauthenticate with password credential.
+  if (hasPasswordProvider(user) && user.email) {
+    const password = deleteAccountPasswordInput?.value || "";
+    if (!password) {
+      throw new Error("Enter your password to delete your account.");
+    }
+    const credential = EmailAuthProvider.credential(user.email, password);
+    await reauthenticateWithCredential(user, credential);
+    return;
+  }
+
+  // For Google accounts, use the Google popup reauth flow.
+  if (hasGoogleProvider(user)) {
+    await reauthenticateWithPopup(auth, googleProvider);
+    return;
+  }
+
+  throw new Error("This account cannot be re-authenticated from this screen.");
+}
+
+if (profileForm) {
+  profileForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearMessage();
+
+    const user = auth.currentUser;
+    if (!user) return;
+
+    const name = profileDisplayNameInput?.value?.trim() || "";
+    if (!name) {
+      showMessage("Please enter your full name.", "error");
+      return;
+    }
+
+    try {
+      await updateProfile(user, { displayName: name });
+      await setDoc(doc(db, "users", user.uid), { displayName: name }, { merge: true });
+      await setDoc(
+        doc(db, "players", user.uid),
+        {
+          name,
+          active: true,
+          userId: user.uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await loadPlayers();
+      showMessage("Profile saved.");
+    } catch (error) {
+      showMessage(error.message, "error");
+    }
+  });
+
+  if (deleteAccountButton) {
+    deleteAccountButton.addEventListener("click", async () => {
+      clearMessage();
+      const user = auth.currentUser;
+      if (!user) return;
+
+      const ok = window.confirm(
+        "Delete your account permanently? This cannot be undone. Your votes and profile will be removed."
+      );
+      if (!ok) return;
+
+      try {
+        await reauthenticateForSensitiveAction(user);
+        await deleteFirestoreDataForUser(user.uid);
+        await deleteUser(user);
+        showMessage("Account deleted.");
+      } catch (error) {
+        const code = error?.code || "";
+        if (code === "auth/requires-recent-login") {
+          showMessage(
+            "Please sign out and sign in again, then try deleting your account.",
+            "error"
+          );
+        } else {
+          showMessage(error.message || String(error), "error");
+        }
+      }
+    });
+  }
+}
+
 async function loadVotesForReports() {
   if (!isAtLeastRole("coach")) {
     votes = [];
@@ -1286,6 +1388,109 @@ async function recordPublicPlayersPlayerTally(gameId, playerName) {
     );
   }
 }
+
+async function mergeDuplicatePlayer(primaryName, duplicateName) {
+  if (!primaryName || !duplicateName || primaryName === duplicateName) {
+    showMessage("Names must be valid and different.", "error");
+    return;
+  }
+
+  const batch = writeBatch(db);
+  console.log(`Starting merge: ${duplicateName} -> ${primaryName}`);
+
+  const votesSnapshot = await getDocs(collection(db, "votes"));
+  votesSnapshot.docs.forEach(voteDoc => {
+    const data = voteDoc.data();
+    let needsUpdate = false;
+    const updates = {};
+
+    if (data.bestAndFairest?.threePoints === duplicateName) {
+      updates["bestAndFairest.threePoints"] = primaryName;
+      needsUpdate = true;
+    }
+    if (data.bestAndFairest?.twoPoints === duplicateName) {
+      updates["bestAndFairest.twoPoints"] = primaryName;
+      needsUpdate = true;
+    }
+    if (data.bestAndFairest?.onePoint === duplicateName) {
+      updates["bestAndFairest.onePoint"] = primaryName;
+      needsUpdate = true;
+    }
+    if (data.playersPlayer === duplicateName) {
+      updates.playersPlayer = primaryName;
+      needsUpdate = true;
+    }
+
+    if (needsUpdate) batch.update(voteDoc.ref, updates);
+  });
+
+  const gamesSnapshot = await getDocs(collection(db, "games"));
+  gamesSnapshot.docs.forEach(gameDoc => {
+    const gameData = gameDoc.data();
+    if (gameData.tryScorers && gameData.tryScorers.includes(duplicateName)) {
+      const updatedScorers = gameData.tryScorers.map(name => 
+        name === duplicateName ? primaryName : name
+      );
+      batch.update(gameDoc.ref, { tryScorers: [...new Set(updatedScorers)] });
+    }
+  });
+
+  const statsSnapshot = await getDocs(collection(db, "gamePublicStats"));
+  const dupKey = sanitizeFieldKey(duplicateName);
+  const primKey = sanitizeFieldKey(primaryName);
+
+  statsSnapshot.docs.forEach(statDoc => {
+    const statData = statDoc.data();
+    if (statData.playersPlayerTallies && statData.playersPlayerTallies[dupKey]) {
+      const dupVotes = statData.playersPlayerTallies[dupKey];
+      const primVotes = statData.playersPlayerTallies[primKey] || 0;
+
+      const newTallies = { ...statData.playersPlayerTallies };
+      newTallies[primKey] = primVotes + dupVotes;
+      delete newTallies[dupKey];
+
+      const newDisplayNames = { ...statData.displayNames };
+      newDisplayNames[primKey] = primaryName;
+      delete newDisplayNames[dupKey];
+
+      batch.update(statDoc.ref, {
+        playersPlayerTallies: newTallies,
+        displayNames: newDisplayNames
+      });
+    }
+  });
+
+  const playersSnapshot = await getDocs(collection(db, "players"));
+  playersSnapshot.docs.forEach(playerDoc => {
+    if (playerDoc.data().name === duplicateName) {
+      batch.delete(playerDoc.ref);
+    }
+  });
+
+  try {
+    await batch.commit();
+    showMessage(`Successfully merged ${duplicateName} into ${primaryName}`);
+  } catch (error) {
+    showMessage(`Batch commit failed: ${error.message}`, "error");
+  }
+}
+
+runMigrationBtn.addEventListener("click", async () => {
+  const primary = window.prompt("Enter the exact name of the player you want to KEEP:");
+  if (!primary) return;
+  
+  const duplicate = window.prompt(`Enter the EXACT name of the duplicate player to merge into "${primary}" and delete:`);
+  
+  if (primary && duplicate) {
+    if (window.confirm(`Are you sure you want to merge "${duplicate}" into "${primary}"? This cannot be undone.`)) {
+      await mergeDuplicatePlayer(primary.trim(), duplicate.trim());
+      await loadPlayers();
+      await loadGames();
+      await loadPublicGameStats();
+      await loadVotesForReports();
+    }
+  }
+});
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1447,69 +1652,6 @@ addTryScorerButton.addEventListener("click", () => {
   addTryScorerFromPicker();
 });
 
-profileForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  clearMessage();
-  const user = auth.currentUser;
-  if (!user) {
-    return;
-  }
-  const name = profileDisplayNameInput.value.trim();
-  if (!name) {
-    showMessage("Please enter your full name.", "error");
-    return;
-  }
-  try {
-    await updateProfile(user, { displayName: name });
-    await setDoc(
-      doc(db, "users", user.uid),
-      { displayName: name },
-      { merge: true }
-    );
-    await setDoc(
-      doc(db, "players", user.uid),
-      {
-        name,
-        active: true,
-        userId: user.uid,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-    await loadPlayers();
-    showMessage("Profile saved.");
-  } catch (error) {
-    showMessage(error.message, "error");
-  }
-});
-
-deleteAccountButton.addEventListener("click", async () => {
-  clearMessage();
-  const user = auth.currentUser;
-  if (!user) {
-    return;
-  }
-  const ok = window.confirm(
-    "Delete your account permanently? This cannot be undone. Your votes and profile will be removed."
-  );
-  if (!ok) {
-    return;
-  }
-  try {
-    await reauthenticateForSensitiveAction(user);
-    await deleteFirestoreDataForUser(user.uid);
-    await deleteUser(user);
-    showMessage("Account deleted.");
-  } catch (error) {
-    const code = error?.code || "";
-    if (code === "auth/requires-recent-login") {
-      showMessage("Please sign out and sign in again, then try deleting your account.", "error");
-    } else {
-      showMessage(error.message || String(error), "error");
-    }
-  }
-});
-
 voteForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearMessage();
@@ -1542,16 +1684,7 @@ voteForm.addEventListener("submit", async (event) => {
   try {
     const voteDocId = `${formValues.gameId}_${user.uid}`;
     const voteRef = doc(db, "votes", voteDocId);
-    const existingVote = await getDoc(voteRef);
-
-    if (existingVote.exists()) {
-      showMessage(
-        "You have already voted for this game. Only one vote per game is allowed.",
-        "error"
-      );
-      return;
-    }
-
+    
     await setDoc(voteRef, {
       gameId: formValues.gameId,
       userId: user.uid,
@@ -1567,11 +1700,22 @@ voteForm.addEventListener("submit", async (event) => {
     await recordPublicPlayersPlayerTally(formValues.gameId, formValues.playersPlayer);
 
     voteForm.reset();
+
+    myVotes.push(formValues.gameId);
+    renderVoteGameSelect();
     updatePlayerDropdowns();
+
     await loadPublicGameStats();
     showMessage("Vote submitted successfully.");
   } catch (error) {
-    showMessage(error.message, "error");
+    if (error.code === 'permission-denied') {
+      showMessage(
+        "You have already voted for this game. Only one vote per game is allowed.",
+        "error"
+      );
+    } else {
+      showMessage(error.message, "error");
+    }
   }
 });
 
@@ -1587,7 +1731,6 @@ onAuthStateChanged(auth, async (user) => {
     try {
       await ensureLoggedInUserIsPlayer(user);
     } catch (error) {
-      // Non-blocking: voting/games should still load even if player sync fails.
       showMessage(`Player sync warning: ${error.message}`, "error");
     }
 
@@ -1597,6 +1740,7 @@ onAuthStateChanged(auth, async (user) => {
 
     try {
       await loadPlayers();
+      await loadMyVotes();
       await loadGames();
       await loadPublicGameStats();
       await loadUserProfiles();
@@ -1611,6 +1755,7 @@ onAuthStateChanged(auth, async (user) => {
     players = [];
     games = [];
     votes = [];
+    myVotes = [];
     gamePublicStats = {};
     userProfiles = [];
   }

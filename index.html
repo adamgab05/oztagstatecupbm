@@ -121,6 +121,9 @@
             <input id="playerNameInput" type="text" placeholder="Player name" required />
             <button type="submit" class="btn">Add player</button>
           </form>
+          
+          <button id="runMigrationBtn" class="btn danger hidden" style="margin-top: 1rem; width: 100%;" type="button">Merge Duplicate Player</button>
+
           <div id="playersList" class="list"></div>
           <div id="roleManagerSection" class="role-manager hidden">
             <h3>User role manager</h3>
@@ -179,19 +182,24 @@
             <input id="profileDisplayName" type="text" required minlength="2" />
             <button type="submit" class="btn">Save name</button>
           </form>
+
           <hr class="soft-rule" />
+
           <h3>Delete account</h3>
           <p class="muted small">
             This removes your login, profile, roster entry, and your votes.
             You may need to confirm your password or sign in with Google again when deleting.
           </p>
+
           <div id="deleteReauthEmail" class="form hidden">
             <label for="deleteAccountPassword">Confirm password</label>
             <input id="deleteAccountPassword" type="password" autocomplete="current-password" />
           </div>
+
           <p id="deleteReauthGoogleNote" class="muted small hidden">
             You will be asked to sign in with Google again before your account is deleted.
           </p>
+
           <button id="deleteAccountButton" type="button" class="btn danger">Delete my account</button>
         </section>
       </section>
