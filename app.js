@@ -1084,13 +1084,11 @@ function renderReports() {
   const canSeeBestAndFairest = isAtLeastRole("coach");
 
   const bfTotals = {};
-  const ppTotals = {};
   const playerGameStats = {};
   const votesByGame = {};
 
   players.forEach((player) => {
     bfTotals[player.name] = 0;
-    ppTotals[player.name] = 0;
     playerGameStats[player.name] = { tries: 0, gamesWithVotes: 0 };
   });
 
@@ -1124,39 +1122,6 @@ function renderReports() {
       votesByGame[vote.gameId] = (votesByGame[vote.gameId] || 0) + 1;
     });
   }
-
-  // Derive Players' Player totals as a true "sum across games":
-  // for each game, take that game's `playersPlayerTallies` and sum them per person.
-  // This ensures the overall graph matches the per-game chart totals.
-  function buildPpTotalsAcrossGames() {
-    const totals = {};
-
-    // Seed to ensure everyone appears (even if they got 0 votes).
-    players.forEach((p) => {
-      const canonical = canonicalizePlayerName(p.name);
-      if (!canonical) return;
-      totals[canonical] = Number(totals[canonical] || 0);
-    });
-
-    games.forEach((game) => {
-      const stats = gamePublicStats?.[game.id] || {};
-      const tallies = stats.playersPlayerTallies || {};
-      const displayNames = stats.displayNames || {};
-
-      Object.entries(tallies).forEach(([key, value]) => {
-        const rawName = displayNames[key] || key.replace(/_/g, " ");
-        const canonical = canonicalizePlayerName(rawName);
-        if (!canonical) return;
-        totals[canonical] = Number(totals[canonical] || 0) + Number(value || 0);
-      });
-    });
-
-    return totals;
-  }
-
-  const ppTotalsAcrossGames = buildPpTotalsAcrossGames();
-  Object.keys(ppTotals).forEach((k) => delete ppTotals[k]);
-  Object.assign(ppTotals, ppTotalsAcrossGames);
 
   // Keep votesByGame useful for any legacy report rows.
   games.forEach((game) => {
@@ -1245,34 +1210,6 @@ function renderReports() {
       `;
     })
     .join("");
-  const mergedPpTotals = {};
-  Object.entries(ppTotals).forEach(([name, total]) => {
-    const canonical = canonicalizePlayerName(name) || String(name || "").trim();
-    if (!canonical) return;
-    mergedPpTotals[canonical] = (mergedPpTotals[canonical] || 0) + Number(total || 0);
-  });
-
-  const ppRows = Object.entries(mergedPpTotals)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, total]) => `<li>${name}: ${total}</li>`)
-    .join("");
-
-  const sortedPpEntries = Object.entries(mergedPpTotals).sort(
-    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
-  );
-  const maxPp = sortedPpEntries[0]?.[1] || 1;
-  const ppChartRows = sortedPpEntries
-    .map(([name, total]) => {
-      const widthPercent = Math.max(4, Math.round((total / maxPp) * 100));
-      return `
-        <div class="bar-row">
-          <span class="bar-label">${name}</span>
-          <div class="bar-track"><div class="bar-fill accent" style="width:${widthPercent}%"></div></div>
-          <span class="bar-value">${total}</span>
-        </div>
-      `;
-    })
-    .join("");
   const gameRows = games
     .map((game) => `<li>${game.label} - ${formatGameMeta(game)}</li>`)
     .join("");
@@ -1314,10 +1251,6 @@ function renderReports() {
         <h4>Best & Fairest graph</h4>
         <div class="chart">${bfChartRows || "<p class='muted'>No votes yet.</p>"}</div>
       </div>` : ""}
-      <div class="report-card">
-        <h4>Players' Player graph</h4>
-        <div class="chart">${ppChartRows || "<p class='muted'>No votes yet.</p>"}</div>
-      </div>
       <div class="report-card">
         <h4>Players' Player per game</h4>
         <label for="ppPerGameSelect" class="muted small">Select game</label>
