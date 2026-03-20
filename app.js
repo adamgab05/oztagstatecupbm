@@ -806,15 +806,77 @@ async function seedPlayersIfEmpty() {
   return;
 }
 
+function getLinkedPlayerUids(playerList) {
+  const uids = new Set();
+  playerList.forEach((p) => {
+    uids.add(p.id);
+    if (p.userId) {
+      uids.add(p.userId);
+    }
+  });
+  return uids;
+}
+
+/**
+ * Ensures every Firestore user has a matching players/{uid} doc (coach/admin can write).
+ * Fixes users who appear in User Role Manager but never got a roster row (e.g. failed first-login sync).
+ */
+async function syncMissingPlayersFromUserProfiles() {
+  if (!isAtLeastRole("coach")) {
+    return;
+  }
+
+  const linkedUids = getLinkedPlayerUids(players);
+  const usersSnapshot = await getDocs(collection(db, "users"));
+
+  const pending = [];
+  usersSnapshot.docs.forEach((userDoc) => {
+    const uid = userDoc.id;
+    if (linkedUids.has(uid)) {
+      return;
+    }
+    const data = userDoc.data();
+    const profile = { id: uid, ...data };
+    linkedUids.add(uid);
+    pending.push(
+      setDoc(
+        doc(db, "players", uid),
+        {
+          name: getProfileDisplayName(profile),
+          active: true,
+          userId: uid,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      )
+    );
+  });
+
+  if (pending.length > 0) {
+    await Promise.all(pending);
+  }
+}
+
 async function loadPlayers() {
   await seedPlayersIfEmpty();
-  const snapshot = await getDocs(collection(db, "players"));
+  let snapshot = await getDocs(collection(db, "players"));
   players = snapshot.docs
     .map((entry) => ({
       id: entry.id,
       ...entry.data(),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  await syncMissingPlayersFromUserProfiles();
+
+  snapshot = await getDocs(collection(db, "players"));
+  players = snapshot.docs
+    .map((entry) => ({
+      id: entry.id,
+      ...entry.data(),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   renderPlayers();
   setTryScorerPickerOptions(players);
   syncTryScorersWithPlayers();
