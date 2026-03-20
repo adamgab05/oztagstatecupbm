@@ -134,7 +134,6 @@ function isAtLeastRole(minRole) {
 function setRoleUI() {
   userRoleBadge.textContent = `Role: ${currentUserRole}`;
   const canManage = isAtLeastRole("coach");
-  const canViewReports = isAtLeastRole("coach");
   const isAdmin = currentUserRole === "admin";
   const playersTabButton = tabButtons.find((btn) => btn.dataset.tab === "playersTab");
   const gamesTabButton = tabButtons.find((btn) => btn.dataset.tab === "gamesTab");
@@ -142,11 +141,16 @@ function setRoleUI() {
 
   playersTabButton.classList.toggle("hidden", !canManage);
   gamesTabButton.classList.toggle("hidden", !canManage);
-  reportsTabButton.classList.toggle("hidden", !canViewReports);
+  reportsTabButton.classList.remove("hidden");
 
   addPlayerForm.classList.toggle("hidden", !canManage);
   createGameForm.classList.toggle("hidden", !canManage);
   roleManagerSection.classList.toggle("hidden", !isAdmin);
+
+  const activeTabButton = tabButtons.find((button) => button.classList.contains("active"));
+  if (activeTabButton && activeTabButton.classList.contains("hidden")) {
+    openTab("voteTab");
+  }
 }
 
 function sanitizeFieldKey(value) {
@@ -681,10 +685,7 @@ function validateVotes(values) {
 }
 
 function renderReports() {
-  if (!isAtLeastRole("coach")) {
-    reportsContent.innerHTML = '<p class="muted">Reports are visible to admin and coach roles.</p>';
-    return;
-  }
+  const canSeeBestAndFairest = isAtLeastRole("coach");
 
   const bfTotals = {};
   const ppTotals = {};
@@ -697,28 +698,45 @@ function renderReports() {
     playerGameStats[player.name] = { tries: 0, gamesWithVotes: 0 };
   });
 
-  votes.forEach((vote) => {
-    const bf = vote.bestAndFairest || {};
-    if (bf.threePoints) {
-      bfTotals[bf.threePoints] = (bfTotals[bf.threePoints] || 0) + 3;
-      playerGameStats[bf.threePoints] = playerGameStats[bf.threePoints] || { tries: 0, gamesWithVotes: 0 };
-      playerGameStats[bf.threePoints].gamesWithVotes += 1;
-    }
-    if (bf.twoPoints) {
-      bfTotals[bf.twoPoints] = (bfTotals[bf.twoPoints] || 0) + 2;
-      playerGameStats[bf.twoPoints] = playerGameStats[bf.twoPoints] || { tries: 0, gamesWithVotes: 0 };
-      playerGameStats[bf.twoPoints].gamesWithVotes += 1;
-    }
-    if (bf.onePoint) {
-      bfTotals[bf.onePoint] = (bfTotals[bf.onePoint] || 0) + 1;
-      playerGameStats[bf.onePoint] = playerGameStats[bf.onePoint] || { tries: 0, gamesWithVotes: 0 };
-      playerGameStats[bf.onePoint].gamesWithVotes += 1;
-    }
-    if (vote.playersPlayer) {
-      ppTotals[vote.playersPlayer] = (ppTotals[vote.playersPlayer] || 0) + 1;
-    }
-    votesByGame[vote.gameId] = (votesByGame[vote.gameId] || 0) + 1;
-  });
+  if (canSeeBestAndFairest) {
+    votes.forEach((vote) => {
+      const bf = vote.bestAndFairest || {};
+      if (bf.threePoints) {
+        bfTotals[bf.threePoints] = (bfTotals[bf.threePoints] || 0) + 3;
+        playerGameStats[bf.threePoints] = playerGameStats[bf.threePoints] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[bf.threePoints].gamesWithVotes += 1;
+      }
+      if (bf.twoPoints) {
+        bfTotals[bf.twoPoints] = (bfTotals[bf.twoPoints] || 0) + 2;
+        playerGameStats[bf.twoPoints] = playerGameStats[bf.twoPoints] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[bf.twoPoints].gamesWithVotes += 1;
+      }
+      if (bf.onePoint) {
+        bfTotals[bf.onePoint] = (bfTotals[bf.onePoint] || 0) + 1;
+        playerGameStats[bf.onePoint] = playerGameStats[bf.onePoint] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[bf.onePoint].gamesWithVotes += 1;
+      }
+      if (vote.playersPlayer) {
+        ppTotals[vote.playersPlayer] = (ppTotals[vote.playersPlayer] || 0) + 1;
+      }
+      votesByGame[vote.gameId] = (votesByGame[vote.gameId] || 0) + 1;
+    });
+  } else {
+    Object.values(gamePublicStats).forEach((stats) => {
+      const tallies = stats.playersPlayerTallies || {};
+      const displayNames = stats.displayNames || {};
+      Object.entries(tallies).forEach(([key, value]) => {
+        const name = displayNames[key] || key.replace(/_/g, " ");
+        ppTotals[name] = (ppTotals[name] || 0) + Number(value || 0);
+      });
+    });
+    games.forEach((game) => {
+      votesByGame[game.id] = gamePublicStats[game.id]?.totalVotes || 0;
+    });
+    players.forEach((player) => {
+      playerGameStats[player.name] = playerGameStats[player.name] || { tries: 0, gamesWithVotes: 0 };
+    });
+  }
 
   games.forEach((game) => {
     (game.tryScorers || []).forEach((name) => {
@@ -769,6 +787,7 @@ function renderReports() {
 
   reportsContent.innerHTML = `
     <div class="report-grid">
+      ${canSeeBestAndFairest ? `
       <div class="report-card">
         <h4>Best & Fairest leaderboard</h4>
         <ol>${bfRows || "<li>No votes yet.</li>"}</ol>
@@ -776,7 +795,7 @@ function renderReports() {
       <div class="report-card">
         <h4>Best & Fairest graph</h4>
         <div class="chart">${bfChartRows || "<p class='muted'>No votes yet.</p>"}</div>
-      </div>
+      </div>` : ""}
       <div class="report-card">
         <h4>Players' Player tallies</h4>
         <ol>${ppRows || "<li>No votes yet.</li>"}</ol>

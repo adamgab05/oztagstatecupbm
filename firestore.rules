@@ -29,7 +29,7 @@ service cloud.firestore {
 
     match /players/{playerId} {
       allow read: if signedIn();
-      allow write: if isCoachOrAdmin();
+      allow write: if isCoachOrAdmin() || isSelf(playerId);
     }
 
     match /games/{gameId} {
