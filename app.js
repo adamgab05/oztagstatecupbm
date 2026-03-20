@@ -185,6 +185,21 @@ function getProfileDisplayName(profile) {
   return (profile.displayName || "").trim() || (profile.email || "").split("@")[0] || profile.id;
 }
 
+function normalizePersonName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function canonicalizePlayerName(name) {
+  const normalized = normalizePersonName(name);
+  if (!normalized) return "";
+
+  const match = players.find((p) => normalizePersonName(p.name) === normalized);
+  return match ? match.name : String(name).trim();
+}
+
 function openTab(tabId) {
   tabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tabId);
@@ -596,11 +611,18 @@ function getPlayersPlayerTalliesForGame(gameId) {
   const stats = gamePublicStats[gameId] || {};
   const tallies = stats.playersPlayerTallies || {};
   const displayNames = stats.displayNames || {};
-  return Object.entries(tallies)
-    .map(([key, count]) => ({
-      name: displayNames[key] || key.replace(/_/g, " "),
-      count,
-    }))
+
+  // Canonicalize names to avoid duplicates caused by whitespace/case differences.
+  const merged = {};
+  Object.entries(tallies).forEach(([key, count]) => {
+    const rawName = displayNames[key] || key.replace(/_/g, " ");
+    const canonicalName = canonicalizePlayerName(rawName);
+    if (!canonicalName) return;
+    merged[canonicalName] = (merged[canonicalName] || 0) + Number(count || 0);
+  });
+
+  return Object.entries(merged)
+    .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
 }
 
@@ -1004,22 +1026,33 @@ function renderReports() {
     votes.forEach((vote) => {
       const bf = vote.bestAndFairest || {};
       if (bf.threePoints) {
-        bfTotals[bf.threePoints] = (bfTotals[bf.threePoints] || 0) + 3;
-        playerGameStats[bf.threePoints] = playerGameStats[bf.threePoints] || { tries: 0, gamesWithVotes: 0 };
-        playerGameStats[bf.threePoints].gamesWithVotes += 1;
+        const canonical = canonicalizePlayerName(bf.threePoints);
+        if (!canonical) return;
+        bfTotals[canonical] = (bfTotals[canonical] || 0) + 3;
+        playerGameStats[canonical] =
+          playerGameStats[canonical] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[canonical].gamesWithVotes += 1;
       }
       if (bf.twoPoints) {
-        bfTotals[bf.twoPoints] = (bfTotals[bf.twoPoints] || 0) + 2;
-        playerGameStats[bf.twoPoints] = playerGameStats[bf.twoPoints] || { tries: 0, gamesWithVotes: 0 };
-        playerGameStats[bf.twoPoints].gamesWithVotes += 1;
+        const canonical = canonicalizePlayerName(bf.twoPoints);
+        if (!canonical) return;
+        bfTotals[canonical] = (bfTotals[canonical] || 0) + 2;
+        playerGameStats[canonical] =
+          playerGameStats[canonical] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[canonical].gamesWithVotes += 1;
       }
       if (bf.onePoint) {
-        bfTotals[bf.onePoint] = (bfTotals[bf.onePoint] || 0) + 1;
-        playerGameStats[bf.onePoint] = playerGameStats[bf.onePoint] || { tries: 0, gamesWithVotes: 0 };
-        playerGameStats[bf.onePoint].gamesWithVotes += 1;
+        const canonical = canonicalizePlayerName(bf.onePoint);
+        if (!canonical) return;
+        bfTotals[canonical] = (bfTotals[canonical] || 0) + 1;
+        playerGameStats[canonical] =
+          playerGameStats[canonical] || { tries: 0, gamesWithVotes: 0 };
+        playerGameStats[canonical].gamesWithVotes += 1;
       }
       if (vote.playersPlayer) {
-        ppTotals[vote.playersPlayer] = (ppTotals[vote.playersPlayer] || 0) + 1;
+        const canonical = canonicalizePlayerName(vote.playersPlayer);
+        if (!canonical) return;
+        ppTotals[canonical] = (ppTotals[canonical] || 0) + 1;
       }
       votesByGame[vote.gameId] = (votesByGame[vote.gameId] || 0) + 1;
     });
@@ -1028,8 +1061,10 @@ function renderReports() {
       const tallies = stats.playersPlayerTallies || {};
       const displayNames = stats.displayNames || {};
       Object.entries(tallies).forEach(([key, value]) => {
-        const name = displayNames[key] || key.replace(/_/g, " ");
-        ppTotals[name] = (ppTotals[name] || 0) + Number(value || 0);
+        const rawName = displayNames[key] || key.replace(/_/g, " ");
+        const canonical = canonicalizePlayerName(rawName);
+        if (!canonical) return;
+        ppTotals[canonical] = (ppTotals[canonical] || 0) + Number(value || 0);
       });
     });
     games.forEach((game) => {
@@ -1042,10 +1077,12 @@ function renderReports() {
 
   games.forEach((game) => {
     (game.tryScorers || []).forEach((name) => {
-      if (!playerGameStats[name]) {
-        playerGameStats[name] = { tries: 0, gamesWithVotes: 0 };
+      const canonical = canonicalizePlayerName(name);
+      if (!canonical) return;
+      if (!playerGameStats[canonical]) {
+        playerGameStats[canonical] = { tries: 0, gamesWithVotes: 0 };
       }
-      playerGameStats[name].tries += 1;
+      playerGameStats[canonical].tries += 1;
     });
   });
 
@@ -1398,25 +1435,33 @@ async function mergeDuplicatePlayer(primaryName, duplicateName) {
   const batch = writeBatch(db);
   console.log(`Starting merge: ${duplicateName} -> ${primaryName}`);
 
+  const normalizeName = (s) => String(s || "").trim().toLowerCase();
+  const dupNorm = normalizeName(duplicateName);
+  const primaryNorm = normalizeName(primaryName);
+
   const votesSnapshot = await getDocs(collection(db, "votes"));
-  votesSnapshot.docs.forEach(voteDoc => {
-    const data = voteDoc.data();
+  votesSnapshot.docs.forEach((voteDoc) => {
+    const data = voteDoc.data() || {};
     let needsUpdate = false;
     const updates = {};
 
-    if (data.bestAndFairest?.threePoints === duplicateName) {
+    const three = data.bestAndFairest?.threePoints;
+    const two = data.bestAndFairest?.twoPoints;
+    const one = data.bestAndFairest?.onePoint;
+
+    if (normalizeName(three) === dupNorm) {
       updates["bestAndFairest.threePoints"] = primaryName;
       needsUpdate = true;
     }
-    if (data.bestAndFairest?.twoPoints === duplicateName) {
+    if (normalizeName(two) === dupNorm) {
       updates["bestAndFairest.twoPoints"] = primaryName;
       needsUpdate = true;
     }
-    if (data.bestAndFairest?.onePoint === duplicateName) {
+    if (normalizeName(one) === dupNorm) {
       updates["bestAndFairest.onePoint"] = primaryName;
       needsUpdate = true;
     }
-    if (data.playersPlayer === duplicateName) {
+    if (normalizeName(data.playersPlayer) === dupNorm) {
       updates.playersPlayer = primaryName;
       needsUpdate = true;
     }
@@ -1425,44 +1470,78 @@ async function mergeDuplicatePlayer(primaryName, duplicateName) {
   });
 
   const gamesSnapshot = await getDocs(collection(db, "games"));
-  gamesSnapshot.docs.forEach(gameDoc => {
-    const gameData = gameDoc.data();
-    if (gameData.tryScorers && gameData.tryScorers.includes(duplicateName)) {
-      const updatedScorers = gameData.tryScorers.map(name => 
-        name === duplicateName ? primaryName : name
-      );
-      batch.update(gameDoc.ref, { tryScorers: [...new Set(updatedScorers)] });
-    }
-  });
+  gamesSnapshot.docs.forEach((gameDoc) => {
+    const gameData = gameDoc.data() || {};
+    const tryScorers = Array.isArray(gameData.tryScorers)
+      ? gameData.tryScorers
+      : [];
 
-  const statsSnapshot = await getDocs(collection(db, "gamePublicStats"));
-  const dupKey = sanitizeFieldKey(duplicateName);
-  const primKey = sanitizeFieldKey(primaryName);
+    const updatedScorers = tryScorers.map((name) => {
+      if (normalizeName(name) === dupNorm) return primaryName;
+      return name;
+    });
 
-  statsSnapshot.docs.forEach(statDoc => {
-    const statData = statDoc.data();
-    if (statData.playersPlayerTallies && statData.playersPlayerTallies[dupKey]) {
-      const dupVotes = statData.playersPlayerTallies[dupKey];
-      const primVotes = statData.playersPlayerTallies[primKey] || 0;
+    const changed = updatedScorers.some((name, idx) => {
+      const original = tryScorers[idx];
+      return normalizeName(original) !== normalizeName(name);
+    });
 
-      const newTallies = { ...statData.playersPlayerTallies };
-      newTallies[primKey] = primVotes + dupVotes;
-      delete newTallies[dupKey];
-
-      const newDisplayNames = { ...statData.displayNames };
-      newDisplayNames[primKey] = primaryName;
-      delete newDisplayNames[dupKey];
-
-      batch.update(statDoc.ref, {
-        playersPlayerTallies: newTallies,
-        displayNames: newDisplayNames
+    if (changed) {
+      batch.update(gameDoc.ref, {
+        tryScorers: [...new Set(updatedScorers)],
       });
     }
   });
 
+  const statsSnapshot = await getDocs(collection(db, "gamePublicStats"));
+  const primKey = sanitizeFieldKey(primaryName);
+
+  statsSnapshot.docs.forEach((statDoc) => {
+    const statData = statDoc.data() || {};
+    const tallies = { ...(statData.playersPlayerTallies || {}) };
+    const displayNames = { ...(statData.displayNames || {}) };
+
+    // Find all tally keys whose display name matches the duplicate (after normalization).
+    const dupKeysFromDisplay = Object.keys(displayNames).filter(
+      (k) => normalizeName(displayNames[k]) === dupNorm
+    );
+
+    // Fallback: if displayNames are missing/incomplete, try the direct key derived from the raw input.
+    const fallbackDupKey = sanitizeFieldKey(duplicateName);
+    const dupKeys =
+      dupKeysFromDisplay.length > 0
+        ? dupKeysFromDisplay
+        : fallbackDupKey in tallies
+          ? [fallbackDupKey]
+          : [];
+
+    if (dupKeys.length === 0) {
+      return;
+    }
+
+    let movedVotes = 0;
+    dupKeys.forEach((k) => {
+      movedVotes += Number(tallies[k] || 0);
+      delete tallies[k];
+      delete displayNames[k];
+    });
+
+    if (!tallies[primKey]) tallies[primKey] = 0;
+    tallies[primKey] = Number(tallies[primKey] || 0) + movedVotes;
+    displayNames[primKey] = primaryName;
+
+    batch.update(statDoc.ref, {
+      playersPlayerTallies: tallies,
+      displayNames: displayNames,
+    });
+  });
+
   const playersSnapshot = await getDocs(collection(db, "players"));
-  playersSnapshot.docs.forEach(playerDoc => {
-    if (playerDoc.data().name === duplicateName) {
+  playersSnapshot.docs.forEach((playerDoc) => {
+    const playerData = playerDoc.data() || {};
+    if (normalizeName(playerData.name) === dupNorm) {
+      // Avoid deleting the primary if they already share the same name string normalization.
+      if (normalizeName(playerData.name) === primaryNorm && primaryName === playerData.name) return;
       batch.delete(playerDoc.ref);
     }
   });
